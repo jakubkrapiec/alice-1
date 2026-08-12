@@ -12,3 +12,4 @@ jobs:
           github_repo_id: ${{ github.repository }}
           huggingface_repo_id: jakubkrapiec/Alice-1
           hf_token: ${{ secrets.HF_TOKEN }}
+          repo_type: model

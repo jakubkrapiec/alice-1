@@ -1,0 +1,226 @@
+# Alice-1: a CRF -> VMAF prediction model
+
+A LightGBM model that predicts the CRF value needed to hit a target VMAF, given cheap content features of a video segment, a target resolution, and a codec. Covers x264, x265, VP9 and AV1 (SVT-AV1) at 720p, 1080p, 1440p and 2160p, for target VMAF 60–95.
+
+Trained on 1.73M samples derived from 53.5k measured CRF -> VMAF curves across 18,098 unique source videos (CC0/CC-BY stock footage and standard test sequences).
+
+---
+
+## Table of contents
+
+- [What the model does](#what-the-model-does)
+- [Quick start](#quick-start)
+- [Input features](#input-features)
+- [Video length](#video-length)
+- [Encoder settings the model assumes](#encoder-settings-the-model-assumes)
+- [Calibrating to your encoder settings](#calibrating-to-your-encoder-settings-recommended)
+- [Training data](#training-data)
+- [Evaluation](#evaluation)
+- [Strengths](#strengths)
+- [Limitations & known failure modes](#limitations--known-failure-modes)
+- [Package contents](#package-contents)
+- [How the model was built](#how-the-model-was-built-pipeline)
+- [Retraining / drift](#retraining--drift)
+- [Data sources & credits](#data-sources--credits)
+
+---
+
+## What the model does
+
+Per-title and per-scene encoding pipelines need to know, for a given chunk of content, resolution and codec, which CRF produces a given VMAF. Solving this by brute force (even by using binary search) means encoding each segment at several CRFs and measuring VMAF, which is expensive. This model answers it in milliseconds from lightweight content features that cost one decode plus one filter pass to compute, with no encoding required.
+
+- **Input:** 16 features - content statistics (SI/TI/motion), fps, source and target resolution, codec, target VMAF.
+- **Output:** predicted CRF (float; round and clamp to the codec's legal range before encoding), plus an 80% prediction interval (q10–q90) from the bundled quantile models.
+- **Model:** LightGBM GBDT quantile family (v1.5.0). Point prediction is the median (q50), 377 trees, 511 leaves, text format (`model.txt`, 17.8 MB). Interval bounds live in `model_q10.txt` / `model_q90.txt`. Built with LightGBM 4.7.
+
+Typical use case: a per-title ladder generator or a per-scene constrained-quality encoder controller.
+
+## Quick start
+
+Requirements: Python 3.10+, `lightgbm`, `numpy`, `pandas`, and an `ffmpeg` binary with `libvmaf` (`vmafmotion` filter) on `$PATH`.
+
+```bash
+pip install -r requirements.txt
+
+# Predict CRF for a target quality:
+python predict.py input.mp4 --codec av1 --target-height 2160 --target-vmaf 90
+# -> "predicted CRF: 41  (raw 40.8)"
+#    "80% interval (q10-q90): CRF 36..47  (raw 35.60..47.12)"
+# (point prediction only: --no-interval)
+```
+
+Minimal programmatic use:
+
+```python
+import lightgbm as lgb
+import pandas as pd
+from predict import extract_features, build_feature_row, FEATURES, CODEC_CATS, CRF_RANGE
+
+model = lgb.Booster(model_file="model.txt")
+# analyzes the whole file; pass start=/duration= to analyze one segment
+feats, meta = extract_features("input.mp4", width=3840, height=2160)
+row = build_feature_row(feats, meta, codec="av1", target_vmaf=90,
+                        target_width=3840, target_height=2160)
+df = pd.DataFrame([row])
+df["codec"] = pd.Categorical(df["codec"], categories=CODEC_CATS)  # order matters
+crf = float(model.predict(df[FEATURES])[0])
+lo, hi = CRF_RANGE["av1"]
+crf = int(round(min(max(crf, lo), hi)))
+```
+
+Note on categoricals: the model was trained with `codec` as a pandas categorical with alphabetical categories `["av1", "vp9", "x264", "x265"]`. At inference you must construct the categorical the same way as in the example above. Passing raw integer codes raises `train and valid dataset categorical_feature do not match`.
+
+## Input features
+
+All content features are computed on the target-resolution segment, after bicubic scaling. This mirrors training exactly - features computed any other way (source resolution, a different scaler) shift the distribution and degrade accuracy.
+
+| # | Feature | Description |
+|---|---------|-------------|
+| 1 | `si_mean` | Mean per-frame spatial information: luma-plane mean of the Sobel edge filter (ffmpeg `sobel` + `signalstats` `YAVG`). Proxy for spatial complexity/detail. |
+| 2 | `si_std` | Per-frame std-dev of the above (within-segment spatial variability). |
+| 3 | `ti_mean` | Mean per-frame temporal information: luma mean of the frame-difference signal (ffmpeg `tblend=all_mode=difference` + `signalstats` `YAVG`). Proxy for motion amount. |
+| 4 | `ti_std` | Per-frame std-dev of TI. |
+| 5 | `vmafmotion` | Mean of libvmaf's `motion` feature (SAD-based) over the segment (`vmafmotion` filter). |
+| 6 | `fps` | Frames per second of the source. |
+| 7 | `target_height` | Output height in pixels (720/1080/1440/2160). |
+| 8 | `target_width` | Output width in pixels (1280/1920/2560/3840). |
+| 9 | `source_height` | Source height in pixels. |
+| 10 | `codec` | Categorical: `av1`, `vp9`, `x264`, `x265`. |
+| 11 | `target_vmaf` | Desired VMAF score (60–95). |
+| 12–16 | derived | `si_x_ti=si_mean·ti_mean`, `motion_x_ti=vmafmotion·ti_mean`, `si_cv=si_std/(si_mean+1e-6)`, `ti_cv=ti_std/(ti_mean+1e-6)`, `res_ratio=source_height/target_height` |
+
+`predict.py` computes all of these for you.
+
+## Video length
+
+The model was trained on ~10s segments but works for videos of any length ≥ ~3s. The content features are temporal aggregates (mean/std of per-frame statistics), so they don't depend on the length of the analyzed window. By default `predict.py` analyzes the whole file; use `--start` / `--duration` to analyze a single segment instead for per-scene use. Windows under 3s produce noisy frame statistics - `predict.py` prints a warning and the result should be treated as rough guidance only.
+
+## Encoder settings the model assumes
+
+A CRF value is only meaningful relative to a specific encoder, preset and speed configuration. The model was trained on, and therefore predicts for, exactly these settings:
+
+| Codec | Encoder & settings | CRF range |
+|-------|--------------------|-----------|
+| `x264` | `libx264 -preset veryfast` | 0–51 |
+| `x265` | `libx265 -preset veryfast` | 0–51 |
+| `vp9` | `libvpx-vp9 -b:v 0 -cpu-used 6 -row-mt 1 -deadline good` | 0–63 |
+| `av1` | `libsvtav1 -preset 10` (`-preset 12` at 2160p) | 0–63 |
+
+Scaling before encode: `scale=W:H:force_original_aspect_ratio=decrease` + pad to WxH, `format=yuv420p`. Training used ffmpeg 6.1.1 (Ubuntu 24.04).
+
+If your pipeline uses different presets or speeds (e.g. x264 `medium`, SVT-AV1 `preset 6`), the CRF -> VMAF mapping shifts and predictions will be off. Treat the model as a prior and calibrate with a few probe encodes, or retrain.
+
+**AV1 preset note.** Training encodes used SVT-AV1 `-preset 10` at 720p–1440p and the faster `-preset 12` at 2160p. The preset regime is fully determined by (codec, target_height), so the model separates it internally, and the 2160p AV1 labels were measured under preset 12. If your 2160p AV1 encode uses a slower preset (e.g. 6–10), expect actual VMAF to land roughly 3–5 points above target (preset 12 gives ~3–5 VMAF less per CRF than preset 10); a faster preset than 10 at ≤1440p shifts the result the other way.
+
+**VMAF models:** labels <=1080p use `vmaf_v0.6.1`; 1440p/2160p use `vmaf_4k_v0.6.1`. Scores from the 4K model aren't on exactly the same perceptual anchor as the 1080p model - keep this in mind when comparing targets across resolutions.
+
+## Calibrating to your encoder settings (strongly recommended)
+
+If your encoder configuration differs from the training settings above - a different preset, speed flags, or an encoder-version upgrade - run a one-time probe calibration. A preset or version change shifts the CRF -> VMAF curve roughly horizontally, so a single measured offset removes most of the systematic error while the model keeps doing the content-dependent work.
+
+```bash
+# 1. one-time: >= 20 diverse probe videos, ~3 encodes each (takes minutes)
+python3 calibrate.py --model model.txt --codec x264 \
+    --encoder-args "-c:v libx264 -preset medium" \
+    --target-vmaf 85 --height 1080 \
+    --videos probes/*.mp4 --output calibration.json
+
+# 2. then just pass the calibration file to predict.py
+python3 predict.py input.mp4 --codec x264 --target-height 1080 \
+    --target-vmaf 85 --calibration calibration.json
+```
+
+For each probe video, the tool predicts the CRF, encodes a 10s window at three ladder points around the prediction using your `--encoder-args`, measures VMAF against the scaled source (same scaling and VMAF model as training), inverts at the target, and stores the median delta between actual and predicted CRF. `predict.py` then applies the offset (`CRF_final = round(prediction + delta)`).
+
+
+Notes:
+
+- Use at least 20 diverse probe videos for a stable median. The tool prints the IQR so you can judge the spread - content-dependence of the shift is small but non-zero, about ±0.5 CRF in my tests.
+- Calibrate per codec * resolution you deploy. One file can hold multiple entries; `calibrate.py` replaces entries keyed by codec+height+target.
+- A calibration measured at a nearby `target_vmaf` is reused automatically, since preset shifts are roughly constant across targets.
+- `calibrate.py` needs the `vmaf` CLI (libvmaf command-line tools) on PATH, the same tool used by the training pipeline. Binary names can be overridden with the `FFMPEG` / `FFPROBE` / `VMAF` environment variables.
+
+## Training data
+
+- **18,098 unique source videos** (full list: `training_videos.txt`) - Pixabay (dominant), Mixkit, Pexels, Internet Archive, Wikimedia Commons, Xiph (derf / aomctc / extra), Blender Foundation. SDR, 8-bit, 720p–4K, ~6–60s clips, wide content mix (nature, city, people, sports, CGI, screen content, film grain).
+- **Two measurement datasets:**
+  - *main:* 38,151 segments @720p, x264 only, jittered 6-point CRF ladder (anchors 18/43 + 4 random interior points per segment, deterministic per segment), giving dense real coverage of CRF 18–43.
+  - *multicodec:* 3,891 (segment * resolution) rows, 4 codecs, fixed 5-point ladders: x264/x265 CRF {18,23,28,33/34,40}, vp9/av1 CRF {30,40,50,58,63}.
+- **Labels:** per (segment * codec * resolution), a decreasing logistic curve is fit to the 5–6 measured (CRF, VMAF) points (fallback: linear interpolation; 99.8% of fits logistic, mean fit RMSE ≈ 0.55 VMAF). The curve is inverted analytically for each integer target VMAF 60–95. Labels are emitted only when the inverted CRF lies inside the measured ladder - extrapolated labels are dropped. An earlier iteration extrapolated past the ladder for vp9/AV1 at CRF > 52, which biased those codecs by roughly +4 VMAF; the current pipeline avoids this.
+- **Table:** 1,731,985 rows - 1,427,912 x264 / 109,343 x265 / 106,515 vp9 / 88,215 av1; 1,435,530 @720p / 134,702 @1080p / 97,005 @1440p / 64,748 @2160p.
+- **Split:** by source video, never by row - train 80% / val 10% / test 10% (deterministic MD5 hash of `source_key`), so there's no content leakage between splits.
+- **Model selection:** 6-config hyperparameter sweep (best: 511 leaves, lr 0.03, feature_fraction 0.8, L2 1.0, early stopping - 154 rounds in v1.0, 137 in v1.1 after feature pruning). A two-stage residual-correction model (in the style used by some Bilibili encoding papers) was tried and rejected: it found no learnable structure in the stage-1 residuals and early-stopped after one iteration.
+
+## Evaluation
+
+### Label-space (held-out test sources, 180,610 rows)
+
+Predicted CRF is mapped back to VMAF via the segment's fitted curve and compared with the target. Test split: 10% of the 18,098 source videos, disjoint by source.
+
+| Metric         | Value |
+| -------------- | -------------------- |
+| VMAF MAE       | 3.52                 |
+| VMAF bias      | +0.14                |
+| CRF MAE        | 1.66                 |
+| within ±1 VMAF | 26.2%                |
+| within ±2 VMAF | 43.4%                |
+| within ±5 VMAF | 76.0%                |
+
+#### 80% prediction interval (q10–q90, label-space)
+
+| Metric                 | Value           |
+| ---------------------- | --------------- |
+| Coverage (nominal 80%) | 74.3%           |
+| Mean / median width    | 4.90 / 4.19 CRF |
+| Bound crossings        | 0%              |
+
+## Strengths
+
+- Well-calibrated at practically relevant targets: for target VMAF ≥ 85 the model is essentially unbiased (target 85: -0.25). High-target accuracy is the best regime (target 95: MAE 2.79, bias −0.91, 89% of encodes within ±5).
+- No systematic codec bias. All four codecs are within ±1.3 VMAF bias on real encodes.
+- Cheap to run: one decode + one filter pass per segment, no GPU, and the model inference itself takes milliseconds.
+- Broad coverage: 4 codecs * 4 resolutions * VMAF 60–95, trained on ~18k diverse sources with real (not synthetic) CRF -> VMAF measurements.
+- Source-disjoint evaluation: both the test split and the end-to-end validation use videos the model never saw during training.
+
+## Limitations & known failure modes
+
+- Low targets (≤80) are the weak regime. MAE 6.1 at target 75. Partly irreducible: for easy content even the maximum CRF yields VMAF ≈ 80+, so "VMAF 75" cannot be reached within the legal CRF range at all - the model correctly saturates at max CRF, but the error is still counted. If you need VMAF ≤ 75, expect best-effort behaviour rather than accuracy.
+- CGI, synthetic, and very smooth content produce the largest errors (worst end-to-end case: a CGI tunnel loop, mean |err| ≈ 10.8).
+- Content features are aggregated over the analyzed window (the whole file, by default), and the model has no visibility into scene changes within that window. For long, mixed-content videos, per-scene prediction (`--start`/`--duration` per shot) is more accurate than one whole-file prediction.
+- Predictions assume the exact encoder builds and presets listed above (see [Encoder settings](#encoder-settings-the-model-assumes)). Encoder upgrades, especially to SVT-AV1, can shift the CR -> VMAF mapping without warning - see [Retraining / drift](#retraining--drift).
+- VMAF itself is a noisy label (it's an SVM-based model with roughly ±0.5 noise floor), and 1440p/2160p labels use the 4K VMAF model, so scores aren't perfectly cross-resolution comparable.
+- CRF ladder coverage censors the label space: a label exists only where the measured CRF ladder brackets the target. The share of source videos with any label at extreme targets varies a lot by codec. Predictions near the edges are best-effort.
+- Training data is SDR, 8-bit only - no HDR, no 10-bit, no film-grain synthesis flags.
+- With aggregate SI/TI/motion features, residual error is dominated by content variation the features can't see.
+
+## Package contents
+
+| File | Description |
+|------|-------------|
+| `model.txt` | LightGBM quantile-median (q50) model (text format), 377 trees - the predictor. |
+| `model_q10.txt` | Quantile q10 model - lower bound of the 80% prediction interval. |
+| `model_q90.txt` | Quantile q90 model - upper bound of the 80% prediction interval. |
+| `README.md` | This document. |
+| `predict.py` | Self-contained inference example: feature extraction (ffmpeg) + prediction, CLI included. |
+| `calibrate.py` | Probe-based calibration for custom encoder presets/builds; writes `calibration.json` consumed by `predict.py --calibration`. |
+| `features.json` | Machine-readable feature spec: order, derived formulas, codec categories, CRF ranges. |
+| `training_videos.txt` | All 18,098 source videos used for training (one `source_key` per line). |
+| `metrics.json` | Full evaluation results (label-space test + end-to-end validation). |
+| `metadata.json` | Version, build date, checksums, library versions. |
+| `requirements.txt` | Python dependencies for `predict.py`. |
+| `LICENSE` | License of this package. |
+| `CHANGELOG` | The changelog. |
+
+## Retraining / drift
+
+Encoder libraries change their CRF semantics over time. Recommended practice:
+
+- For a small sample of production encodes, measure the actual VMAF and compare it with the target the model was asked for. A growing systematic bias indicates model drift and warrants a retrain, at least for the affected codec.
+- Content mix shifts (new platforms, HDR, new genres) also justify retraining.
+- The pipeline is deterministic and re-runnable. The expensive part is re-measuring the CRF ladders, which is CPU-bound encoding work.
+
+## Data sources & credits
+
+- Video: Pixabay, Mixkit, Pexels, Internet Archive, Wikimedia Commons, Xiph.Org Foundation (derf / AOM CTC / extra test sequences), Blender Foundation (CC-licensed open movies).
+- Quality metric: Netflix VMAF (libvmaf), models `vmaf_v0.6.1` and `vmaf_4k_v0.6.1`.
+- Encoders: x264, x265, libvpx, SVT-AV1, via ffmpeg.

@@ -1,0 +1,97 @@
+{
+ "model_file": "model.txt",
+ "model_format": "LightGBM text (lgb.Booster.save_model), 137 trees, max 511 leaves",
+ "lightgbm_version_trained": "4.7.0",
+ "version": "1.4.0",
+ "feature_order": [
+  "si_mean",
+  "si_std",
+  "ti_mean",
+  "ti_std",
+  "vmafmotion",
+  "fps",
+  "target_height",
+  "source_height",
+  "target_width",
+  "codec",
+  "target_vmaf",
+  "si_x_ti",
+  "motion_x_ti",
+  "si_cv",
+  "ti_cv",
+  "res_ratio"
+ ],
+ "categorical_features": {
+  "codec": {
+   "categories_in_training_order": [
+    "av1",
+    "vp9",
+    "x264",
+    "x265"
+   ],
+   "note": "MUST be passed as pandas.Categorical with exactly these categories (alphabetical). Raw int codes raise 'train and valid dataset categorical_feature do not match'."
+  }
+ },
+ "derived_features": {
+  "si_x_ti": "si_mean * ti_mean",
+  "motion_x_ti": "vmafmotion * ti_mean",
+  "si_cv": "si_std / (si_mean + 1e-6)",
+  "ti_cv": "ti_std / (ti_mean + 1e-6)",
+  "res_ratio": "source_height / target_height"
+ },
+ "content_feature_definitions": {
+  "si_mean": "mean over frames of signalstats YAVG after sobel filter, on video scaled to target WxH (bicubic, no pad)",
+  "si_std": "std over frames of the same series",
+  "ti_mean": "mean over frames of signalstats YAVG after tblend=all_mode=difference",
+  "ti_std": "std over frames of the same series",
+  "vmafmotion": "mean over frames of libvmaf vmafmotion filter score"
+ },
+ "pruned_in_v1.1": {
+  "segment_duration": "near-zero variance in training (all ~10 s segments); ablation: 0.07 CRF mean shift, 93% identical after rounding",
+  "log_si": "log1p(si_mean) \u2014 monotonic transform, carries no information for tree models",
+  "log_ti": "log1p(ti_mean) \u2014 same",
+  "log_motion": "log1p(vmafmotion) \u2014 same",
+  "pixels": "target_width * target_height \u2014 exact product of two kept features, lowest gain",
+  "note": "Retrain confirmed zero information loss: test VMAF MAE 3.65 (16 feats) vs 3.60 (21 feats). Model works for any video length >= ~3 s; predict.py analyzes the whole file by default and warns below 3 s."
+ },
+ "crf_ranges": {
+  "x264": [
+   0,
+   51
+  ],
+  "x265": [
+   0,
+   51
+  ],
+  "vp9": [
+   0,
+   63
+  ],
+  "av1": [
+   0,
+   63
+  ]
+ },
+ "resolutions": {
+  "720": 1280,
+  "1080": 1920,
+  "1440": 2560,
+  "2160": 3840
+ },
+ "target_vmaf_range_trained": [
+  60,
+  95
+ ],
+ "segment_duration_trained_seconds": 10.0,
+ "encoder_settings_assumed": {
+  "x264": "libx264 -preset veryfast",
+  "x265": "libx265 -preset veryfast",
+  "vp9": "libvpx-vp9 -b:v 0 -cpu-used 6 -row-mt 1 -deadline good",
+  "av1": "libsvtav1 -preset 10 (-preset 12 at 2160p)"
+ },
+ "vmaf_models": {
+  "<=1080p": "vmaf_v0.6.1",
+  ">=1440p": "vmaf_4k_v0.6.1"
+ },
+ "ffmpeg_version_trained": "6.1.1-3ubuntu5"
+}

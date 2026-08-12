@@ -1,0 +1,354 @@
+#!/usr/bin/env python3
+"""CRF -> VMAF predictor - inference example.
+
+Computes content features for a video (whole file by default, or a chosen
+segment) at the target resolution - one ffmpeg pass, same filters as
+training - and predicts the CRF that should produce the requested VMAF score.
+
+Works for videos of any length >= ~3 s: the content features are temporal
+aggregates (mean/std over frames). A warning is printed
+for analysis windows < 3 s, where frame statistics become noisy.
+
+Usage:
+    python predict.py input.mp4 --codec x265 --target-height 1080 --target-vmaf 90
+    python predict.py input.mp4 --codec av1 --target-height 2160 --target-vmaf 88 \
+        --start 30 --duration 10          # optional: analyze one segment only
+
+When model_q10.txt / model_q90.txt are present next to
+the model file, an 80% prediction interval (CRF q10..q90) is printed too.
+Suppress with --no-interval.
+
+Requires: ffmpeg + ffprobe on PATH (the vmafmotion filter must be compiled
+in - it is in stock Ubuntu and ffmpeg.org builds); lightgbm, numpy, pandas.
+Binary names can be overridden with the FFMPEG / FFPROBE env vars.
+calibrate.py additionally needs the vmaf CLI.
+"""
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from fractions import Fraction
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import lightgbm as lgb
+
+FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
+FFPROBE = os.environ.get("FFPROBE", "ffprobe")
+
+# ---------------------------------------------------------------------------
+# Model spec (must match training exactly) - 16 features, v1.1 pruned set
+# ---------------------------------------------------------------------------
+CODEC_CATS = ["av1", "vp9", "x264", "x265"]          # alphabetical == training
+CRF_RANGE = {"x264": (0, 51), "x265": (0, 51), "vp9": (0, 63), "av1": (0, 63)}
+RES_W = {720: 1280, 1080: 1920, 1440: 2560, 2160: 3840}
+
+MIN_RELIABLE_SECONDS = 3.0
+
+BASE_FEATS = ["si_mean", "si_std", "ti_mean", "ti_std", "vmafmotion",
+              "fps", "target_height", "source_height", "target_width",
+              "codec", "target_vmaf"]
+DERIVED = ["si_x_ti", "motion_x_ti", "si_cv", "ti_cv", "res_ratio"]
+FEATURES = BASE_FEATS + DERIVED   # 16 features, exact training order
+
+
+# ---------------------------------------------------------------------------
+# Probing
+# ---------------------------------------------------------------------------
+def probe(video: str) -> dict:
+    r = subprocess.run(
+        [FFPROBE, "-v", "quiet", "-print_format", "json",
+         "-show_format", "-show_streams", video],
+        capture_output=True, text=True, timeout=60)
+    r.check_returncode()
+    return json.loads(r.stdout)
+
+
+def parse_fps(rate: str) -> float:
+    try:
+        return float(Fraction(rate))
+    except (ValueError, ZeroDivisionError):
+        return 0.0
+
+
+# ---------------------------------------------------------------------------
+# Feature extraction - EXACTLY as in training:
+# plain bicubic scale to WxH (no aspect preservation / pad here),
+# SI = sobel -> signalstats YAVG, TI = tblend difference -> signalstats YAVG,
+# motion = libvmaf vmafmotion stats file.
+# ---------------------------------------------------------------------------
+def _parse_yavg(path: Path) -> list:
+    vals = []
+    if not path.exists():
+        return vals
+    for line in path.read_text(errors="replace").split("\n"):
+        if "YAVG=" in line:
+            try:
+                vals.append(float(line.split("YAVG=")[-1].strip()))
+            except (ValueError, IndexError):
+                pass
+    return vals
+
+
+def _parse_motion(path: Path) -> list:
+    vals = []
+    if not path.exists():
+        return vals
+    for line in path.read_text(errors="replace").split("\n"):
+        if "motion:" in line:
+            try:
+                vals.append(float(line.split("motion:")[-1].strip()))
+            except (ValueError, IndexError):
+                pass
+    return vals
+
+
+def extract_features(video: str, width: int, height: int,
+                     start: float = None, duration: float = None,
+                     threads: int = 4):
+    """Returns (features_dict, meta_dict).
+
+    start/duration: None -> analyze the whole file (default).
+    meta has fps/source_width/height/analyzed_seconds.
+    """
+    pr = probe(video)
+    vs = next((s for s in pr.get("streams", [])
+               if s.get("codec_type") == "video"), None)
+    if not vs:
+        raise RuntimeError("no video stream found")
+    file_dur = float(pr.get("format", {}).get("duration", 0) or 0)
+    meta = {
+        "fps": parse_fps(vs.get("r_frame_rate", "0/1")),
+        "source_width": int(vs.get("width", 0)),
+        "source_height": int(vs.get("height", 0)),
+    }
+
+    seek = []
+    if start is not None:
+        seek += ["-ss", str(start)]
+    if duration is not None:
+        seek += ["-t", str(duration)]
+    meta["analyzed_seconds"] = (duration if duration is not None
+                                else max(file_dur - (start or 0.0), 0.0))
+
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        si_file, ti_file, vm_file = td / "si.txt", td / "ti.txt", td / "vm.txt"
+        fc = (
+            f"[0:v]scale={width}:{height}:flags=bicubic,split=3[a][b][c];"
+            f"[a]sobel,signalstats,metadata=mode=print:file={si_file}:direct=1[aout];"
+            f"[b]tblend=all_mode=difference,signalstats,"
+            f"metadata=mode=print:file={ti_file}:direct=1[bout];"
+            f"[c]vmafmotion=stats_file={vm_file}[cout]"
+        )
+        r = subprocess.run(
+            [FFMPEG, "-y", "-v", "error",
+             "-threads", str(threads), "-filter_threads", str(threads),
+             "-filter_complex_threads", str(threads)]
+            + seek + ["-i", video,
+                      "-filter_complex", fc,
+                      "-map", "[aout]", "-f", "null", "-",
+                      "-map", "[bout]", "-f", "null", "-",
+                      "-map", "[cout]", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=7200)
+        if r.returncode != 0:
+            raise RuntimeError(f"ffmpeg feature extraction failed: "
+                               f"{(r.stderr or '')[-300:]}")
+        si_vals = _parse_yavg(si_file)
+        ti_vals = _parse_yavg(ti_file)
+        vm_vals = _parse_motion(vm_file)
+        if not si_vals or not ti_vals or not vm_vals:
+            raise RuntimeError("feature extraction produced no values")
+
+    feats = {
+        "si_mean": float(np.mean(si_vals)),
+        "si_std": float(np.std(si_vals)) if len(si_vals) > 1 else 0.0,
+        "ti_mean": float(np.mean(ti_vals)),
+        "ti_std": float(np.std(ti_vals)) if len(ti_vals) > 1 else 0.0,
+        "vmafmotion": round(float(np.mean(vm_vals)), 4),
+    }
+    return feats, meta
+
+
+# ---------------------------------------------------------------------------
+# Feature row + prediction
+# ---------------------------------------------------------------------------
+def build_feature_row(feats: dict, meta: dict, codec: str, target_vmaf: float,
+                      target_width: int, target_height: int) -> dict:
+    if codec not in CRF_RANGE:
+        raise ValueError(f"codec must be one of {sorted(CRF_RANGE)}")
+    row = dict(feats)
+    row.update({
+        "fps": float(meta["fps"]),
+        "target_height": int(target_height),
+        "target_width": int(target_width),
+        "source_height": int(meta["source_height"]),
+        "codec": codec,
+        "target_vmaf": float(target_vmaf),
+    })
+    # derived features (same formulas as training)
+    row["si_x_ti"] = row["si_mean"] * row["ti_mean"]
+    row["motion_x_ti"] = row["vmafmotion"] * row["ti_mean"]
+    row["si_cv"] = row["si_std"] / (row["si_mean"] + 1e-6)
+    row["ti_cv"] = row["ti_std"] / (row["ti_mean"] + 1e-6)
+    row["res_ratio"] = row["source_height"] / row["target_height"]
+    return row
+
+
+def load_calibration(path: str, codec: str, target_height: int,
+                     target_vmaf: float) -> tuple:
+    """Returns (delta, entry) for the best-matching calibration entry.
+
+    Matches on codec + target_height; among those picks the entry whose
+    target_vmaf is nearest to the requested one (preset shifts are roughly
+    constant across targets, so a nearby-target calibration is usable).
+    """
+    data = json.loads(Path(path).read_text())
+    cands = [e for e in data.get("entries", [])
+             if e["codec"] == codec and e["target_height"] == target_height]
+    if not cands:
+        raise ValueError(f"no calibration entry for {codec}@{target_height} "
+                         f"in {path}")
+    entry = min(cands, key=lambda e: abs(e["target_vmaf"] - target_vmaf))
+    return float(entry["crf_delta"]), entry
+
+
+def predict_crf(model: lgb.Booster, row: dict) -> tuple:
+    """Returns (crf_int, crf_raw)."""
+    df = pd.DataFrame([row])
+    df["codec"] = pd.Categorical(df["codec"], categories=CODEC_CATS)
+    raw = float(model.predict(df[FEATURES])[0])
+    lo, hi = CRF_RANGE[row["codec"]]
+    return int(round(min(max(raw, lo), hi))), raw
+
+
+def load_interval_models(model_path: str):
+    """Looks for <stem>_q10.txt / <stem>_q90.txt next to the model file.
+
+    Returns (q10_booster, q90_booster) or None when either file is missing
+    (older single-model packages keep working unchanged).
+    """
+    mp = Path(model_path)
+    q10 = mp.parent / f"{mp.stem}_q10{mp.suffix}"
+    q90 = mp.parent / f"{mp.stem}_q90{mp.suffix}"
+    if q10.exists() and q90.exists():
+        return (lgb.Booster(model_file=str(q10)),
+                lgb.Booster(model_file=str(q90)))
+    return None
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Predict CRF for a target VMAF.")
+    ap.add_argument("video")
+    ap.add_argument("--codec", required=True, choices=sorted(CRF_RANGE))
+    ap.add_argument("--target-height", type=int, required=True,
+                    choices=sorted(RES_W))
+    ap.add_argument("--target-vmaf", type=float, required=True)
+    ap.add_argument("--start", type=float, default=None,
+                    help="optional: analyze from this second (default: whole file)")
+    ap.add_argument("--duration", type=float, default=None,
+                    help="optional: analyze only this many seconds")
+    ap.add_argument("--threads", type=int, default=4)
+    ap.add_argument("--model", default="model.txt")
+    ap.add_argument("--no-interval", action="store_true",
+                    help="point prediction only, skip the q10-q90 interval "
+                         "even when model_q10.txt/model_q90.txt are present")
+    ap.add_argument("--calibration", default=None,
+                    help="calibration.json from calibrate.py - adds the "
+                         "measured CRF offset for your encoder settings")
+    ap.add_argument("--crf-offset", type=float, default=None,
+                    help="manual constant added to the raw predicted CRF "
+                         "(ignored when --calibration is given)")
+    ap.add_argument("--json", action="store_true", help="JSON output")
+    args = ap.parse_args()
+
+    if not (60 <= args.target_vmaf <= 95):
+        print("warning: target VMAF outside the trained range 60-95; "
+              "expect degraded accuracy", file=sys.stderr)
+
+    width = RES_W[args.target_height]
+    feats, meta = extract_features(args.video, width, args.target_height,
+                                   start=args.start, duration=args.duration,
+                                   threads=args.threads)
+
+    if meta["analyzed_seconds"] and meta["analyzed_seconds"] < MIN_RELIABLE_SECONDS:
+        print(f"warning: analysis window is only {meta['analyzed_seconds']:.1f} s "
+              f"(< {MIN_RELIABLE_SECONDS:g} s) - frame statistics are noisy, "
+              f"expect reduced accuracy", file=sys.stderr)
+
+    row = build_feature_row(feats, meta, args.codec, args.target_vmaf,
+                            width, args.target_height)
+    model = lgb.Booster(model_file=args.model)
+    crf, raw = predict_crf(model, row)
+
+    # v1.5.0: 80% prediction interval from sibling quantile models
+    q10_raw = q90_raw = None
+    if not args.no_interval:
+        im = load_interval_models(args.model)
+        if im:
+            _, q10_raw = predict_crf(im[0], row)
+            _, q90_raw = predict_crf(im[1], row)
+
+    cal_note = None
+    if args.calibration:
+        delta, entry = load_calibration(args.calibration, args.codec,
+                                        args.target_height, args.target_vmaf)
+        lo, hi = CRF_RANGE[args.codec]
+        raw_cal = raw + delta
+        crf = int(round(min(max(raw_cal, lo), hi)))
+        if q10_raw is not None:
+            q10_raw += delta
+            q90_raw += delta
+        cal_note = {"crf_delta": delta, "crf_uncalibrated": int(round(min(max(raw, lo), hi))),
+                    "source_entry": {k: entry[k] for k in
+                                     ("codec", "target_height", "target_vmaf",
+                                      "encoder_args", "n_used")}}
+    elif args.crf_offset is not None:
+        lo, hi = CRF_RANGE[args.codec]
+        raw_cal = raw + args.crf_offset
+        crf = int(round(min(max(raw_cal, lo), hi)))
+        if q10_raw is not None:
+            q10_raw += args.crf_offset
+            q90_raw += args.crf_offset
+        cal_note = {"crf_delta": args.crf_offset,
+                    "crf_uncalibrated": int(round(min(max(raw, lo), hi)))}
+
+    interval = None
+    if q10_raw is not None:
+        lo, hi = CRF_RANGE[args.codec]
+        interval = {"crf_q10": int(round(min(max(q10_raw, lo), hi))),
+                    "crf_q90": int(round(min(max(q90_raw, lo), hi))),
+                    "crf_q10_raw": round(q10_raw, 3),
+                    "crf_q90_raw": round(q90_raw, 3)}
+
+    if args.json:
+        out = {"crf": crf, "crf_raw": round(raw, 3),
+               "codec": args.codec,
+               "target_height": args.target_height,
+               "target_vmaf": args.target_vmaf,
+               "analyzed_seconds": round(meta["analyzed_seconds"], 2),
+               "features": {k: row[k] for k in BASE_FEATS}}
+        if interval:
+            out["interval_q10_q90"] = interval
+        if cal_note:
+            out["calibration"] = cal_note
+        print(json.dumps(out, indent=1))
+    else:
+        line = (f"predicted CRF: {crf}  (raw {raw:.2f})  "
+                f"[{args.codec} @ {args.target_height}p, target VMAF "
+                f"{args.target_vmaf:g}]")
+        if interval:
+            line += (f"\n80% interval (q10-q90): CRF {interval['crf_q10']}.."
+                     f"{interval['crf_q90']}  (raw {interval['crf_q10_raw']:.2f}"
+                     f"..{interval['crf_q90_raw']:.2f})")
+        if cal_note:
+            line += (f"\ncalibration: {cal_note['crf_delta']:+.2f} CRF "
+                     f"(uncalibrated {cal_note['crf_uncalibrated']})")
+        print(line)
+
+
+if __name__ == "__main__":
+    main()

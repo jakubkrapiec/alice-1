@@ -10,5 +10,5 @@ jobs:
       - uses: huggingface/hub-sync@v0.1.0
         with:
           github_repo_id: ${{ github.repository }}
-          huggingface_repo_id: jakubkrapiec/alice-1
+          huggingface_repo_id: jakubkrapiec/Alice-1
           hf_token: ${{ secrets.HF_TOKEN }}

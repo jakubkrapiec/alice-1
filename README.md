@@ -14,6 +14,7 @@ Trained on 1.73M samples derived from 53.5k measured CRF -> VMAF curves across 1
 - [Video length](#video-length)
 - [Encoder settings the model assumes](#encoder-settings-the-model-assumes)
 - [Calibrating to your encoder settings](#calibrating-to-your-encoder-settings-strongly-recommended)
+- [Encoding with a non-baseline preset](#encoding-with-a-non-baseline-preset---preset)
 - [Training data](#training-data)
 - [Evaluation](#evaluation)
 - [Strengths](#strengths)
@@ -139,6 +140,21 @@ Notes:
 - A calibration measured at a nearby `target_vmaf` is reused automatically, since preset shifts are roughly constant across targets.
 - `calibrate.py` needs the `vmaf` CLI (libvmaf command-line tools) on PATH, the same tool used by the training pipeline. Binary names can be overridden with the `FFMPEG` / `FFPROBE` / `VMAF` environment variables.
 
+## Encoding with a non-baseline preset (`--preset`)
+
+The model predicts the CRF for the training-baseline preset (x264/x265 `veryfast`, vp9 `cpu-used 6`, av1 `preset 10`, or `preset 12` at 2160p). If you encode with a different preset, pass `--preset` and `predict.py` applies the offset measured on the Track 2 preset-delta dataset (5,471 real encodes, 27 clips):
+
+```bash
+python3 predict.py input.mp4 --codec x265 --target-height 1080 \
+    --target-vmaf 90 --preset medium        # +1.25 CRF vs veryfast
+```
+
+Available presets - x264/x265: `veryfast` `fast` `medium` `slow`; vp9: `cu6` `cu4` `cu2`; av1: `p10` `p12` `p8` `p6` (bare numbers work too: `--preset 4` = `cu4` for vp9, `--preset 8` = `p8` for av1). Slower presets shift the CRF up (a more efficient encoder reaches the same VMAF at a higher CRF); the offset shifts the q10-q90 interval as well.
+
+Accuracy of the offsets (leave-one-clip-out validation): median offset error **0.44 CRF** (MAE 0.73) vs 2.25 when the preset is ignored entirely. Tightest for vp9/x265 (<=0.5), widest for av1 (up to ~2 at 1440p/2160p - the printed IQR tells you how much to trust each cell).
+
+Precedence: `--calibration` / `--crf-offset` **replace** the preset offset - a calibration measured with your exact encoder settings already contains the preset effect.
+
 ## Training data
 
 - **18,098 unique source videos** (full list: `training_videos.txt`) - Pixabay (dominant), Mixkit, Pexels, Internet Archive, Wikimedia Commons, Xiph (derf / aomctc / extra), Blender Foundation. SDR, 8-bit, 720p–4K, ~6–60s clips, wide content mix (nature, city, people, sports, CGI, screen content, film grain).
@@ -202,6 +218,7 @@ Predicted CRF is mapped back to VMAF via the segment's fitted curve and compared
 | `README.md` | This document. |
 | `predict.py` | Self-contained inference example: feature extraction (ffmpeg) + prediction, CLI included. |
 | `calibrate.py` | Probe-based calibration for custom encoder presets/builds; writes `calibration.json` consumed by `predict.py --calibration`. |
+| `preset_offsets.json` | Measured CRF offsets per codec * preset * resolution (from the Track 2 preset-delta dataset); consumed by `predict.py --preset`. |
 | `features.json` | Machine-readable feature spec: order, derived formulas, codec categories, CRF ranges. |
 | `training_videos.txt` | All 18,098 source videos used for training (one `source_key` per line). |
 | `metrics.json` | Full evaluation results (label-space test + end-to-end validation). |

@@ -18,6 +18,12 @@ When model_q10.txt / model_q90.txt are present next to
 the model file, an 80% prediction interval (CRF q10..q90) is printed too.
 Suppress with --no-interval.
 
+--preset applies a measured CRF offset (preset_offsets.json next to the
+model) when you encode with a non-baseline preset; training baselines:
+x264/x265 veryfast, vp9 cpu-used 6, av1 p10 (preset 12 at 2160p).
+--calibration / --crf-offset take precedence — they already include the
+preset effect.
+
 Requires: ffmpeg + ffprobe on PATH (the vmafmotion filter must be compiled
 in - it is in stock Ubuntu and ffmpeg.org builds); lightgbm, numpy, pandas.
 Binary names can be overridden with the FFMPEG / FFPROBE env vars.
@@ -145,7 +151,7 @@ def extract_features(video: str, width: int, height: int,
             f"[c]vmafmotion=stats_file={vm_file}[cout]"
         )
         r = subprocess.run(
-            [FFMPEG, "-y", "-v", "error",
+            [FFMPEG, "-y", "-v", "error", "-nostdin",
              "-threads", str(threads), "-filter_threads", str(threads),
              "-filter_complex_threads", str(threads)]
             + seek + ["-i", video,
@@ -240,6 +246,28 @@ def load_interval_models(model_path: str):
     return None
 
 
+def load_preset_offsets(model_path: str):
+    """preset_offsets.json next to the model file, or None when absent."""
+    p = Path(model_path).parent / "preset_offsets.json"
+    return json.loads(p.read_text()) if p.exists() else None
+
+
+def normalize_preset(codec: str, preset: str) -> str:
+    """Accepts 'medium', 'slow', vp9 'cu4'/'4'/'cpu-used 4', av1 'p8'/'8'."""
+    p = preset.strip().lower()
+    if codec == "vp9":
+        p = p.replace("cpu-used", "").replace("cpu", "").strip("- ")
+        return f"cu{p}" if p.isdigit() else p
+    if codec == "av1":
+        return f"p{p}" if p.isdigit() else p
+    return p
+
+
+def baseline_preset(offsets: dict, codec: str, target_height: int) -> str:
+    b = offsets["baseline_presets"][codec]
+    return b[str(target_height)] if isinstance(b, dict) else b
+
+
 def main():
     ap = argparse.ArgumentParser(description="Predict CRF for a target VMAF.")
     ap.add_argument("video")
@@ -259,6 +287,12 @@ def main():
     ap.add_argument("--calibration", default=None,
                     help="calibration.json from calibrate.py - adds the "
                          "measured CRF offset for your encoder settings")
+    ap.add_argument("--preset", default=None,
+                    help="encoder preset you will encode with — x264/x265: "
+                         "veryfast|fast|medium|slow, vp9: cu6|cu4|cu2, "
+                         "av1: p10|p12|p8|p6. Applies the measured CRF offset "
+                         "from preset_offsets.json (ignored when "
+                         "--calibration/--crf-offset is given)")
     ap.add_argument("--crf-offset", type=float, default=None,
                     help="manual constant added to the raw predicted CRF "
                          "(ignored when --calibration is given)")
@@ -291,6 +325,45 @@ def main():
         if im:
             _, q10_raw = predict_crf(im[0], row)
             _, q90_raw = predict_crf(im[1], row)
+
+    # measured preset offset (preset_offsets.json next to the model);
+    # the model predicts the training-baseline preset
+    preset_note = None
+    if args.preset:
+        offsets = load_preset_offsets(args.model)
+        if offsets is None:
+            ap.error("--preset requires preset_offsets.json next to the model "
+                     f"({Path(args.model).parent / 'preset_offsets.json'} "
+                     "not found)")
+        pn = normalize_preset(args.codec, args.preset)
+        base = baseline_preset(offsets, args.codec, args.target_height)
+        cell = None
+        if pn == base:
+            d = 0.0
+        else:
+            cell = offsets["cells"].get(f"{args.codec}|{pn}|{args.target_height}")
+            if cell is None:
+                avail = sorted({k.split("|")[1] for k in offsets["cells"]
+                                if k.startswith(args.codec + "|")} | {base})
+                ap.error(f"no measured offset for {args.codec}/{pn} @ "
+                         f"{args.target_height}p; available for {args.codec}: "
+                         + ", ".join(avail))
+            d = float(cell["delta"])
+        if (args.calibration or args.crf_offset is not None) and d != 0.0:
+            print("warning: --calibration/--crf-offset already captures your "
+                  "encoder settings (incl. preset) — ignoring the --preset "
+                  "offset", file=sys.stderr)
+            d = 0.0
+        if d != 0.0:
+            lo, hi = CRF_RANGE[args.codec]
+            crf = int(round(min(max(raw + d, lo), hi)))
+            if q10_raw is not None:
+                q10_raw += d
+                q90_raw += d
+        preset_note = {"preset": pn, "baseline_preset": base, "crf_delta": d}
+        if cell:
+            preset_note["iqr"] = cell["iqr"]
+            preset_note["n_clips"] = cell["n_clips"]
 
     cal_note = None
     if args.calibration:
@@ -333,6 +406,8 @@ def main():
                "features": {k: row[k] for k in BASE_FEATS}}
         if interval:
             out["interval_q10_q90"] = interval
+        if preset_note:
+            out["preset"] = preset_note
         if cal_note:
             out["calibration"] = cal_note
         print(json.dumps(out, indent=1))
@@ -344,6 +419,13 @@ def main():
             line += (f"\n80% interval (q10-q90): CRF {interval['crf_q10']}.."
                      f"{interval['crf_q90']}  (raw {interval['crf_q10_raw']:.2f}"
                      f"..{interval['crf_q90_raw']:.2f})")
+        if preset_note:
+            line += (f"\npreset: {preset_note['preset']} "
+                     f"({preset_note['crf_delta']:+.2f} CRF vs baseline "
+                     f"{preset_note['baseline_preset']}"
+                     + (f", IQR {preset_note['iqr']:.2f}"
+                        if preset_note.get("iqr") is not None else "")
+                     + ")")
         if cal_note:
             line += (f"\ncalibration: {cal_note['crf_delta']:+.2f} CRF "
                      f"(uncalibrated {cal_note['crf_uncalibrated']})")

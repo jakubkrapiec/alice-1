@@ -391,5 +391,25 @@
     "note": "x264 better (-3.0%) but av1 5.72 vs 5.55 and x265 4.39 vs 4.35 worse (lost transfer learning); rejected"
    }
   }
+ },
+ "v1.6_preset_offsets": {
+  "note": "predict.py --preset + preset_offsets.json: measured CRF offsets for non-baseline encoder presets, derived from preset_delta v1.0 (Track 2). delta = CRF(preset) - CRF(baseline) at equal VMAF via inverse interpolation of per-clip CRF ladders; median over VMAF targets 75-95 and clips. 44 cells (codec x preset x resolution). Model unchanged. av1 baseline corrected to p10 at 1440p (p12 only at 2160p, matching the training pipeline); the v1.6.0 draft had p12 at >=1440p, which shifted the av1@1440p cells.",
+  "file": "preset_offsets.json (v1.0.0, md5 c7fe57882131c674540452ac5bbbb825)",
+  "delta_stability": "delta roughly constant across VMAF targets 75-95 (+/-0.5 within a cell) -> single median per cell; per-target modeling not warranted",
+  "direction_sanity": "slower presets -> positive delta (x264 slow +3.2..+3.6, x265 slow +3.1..+3.6, av1 p6 +3.4..+5.4); av1 p12 vs p10 baseline negative (-2.1..-3.4; p12 is faster than p10); monotone within codec preset order",
+  "loo_validation": {
+   "method": "leave-one-clip-out on per-clip median delta",
+   "residual_mae": 0.725,
+   "residual_median": 0.442,
+   "naive_delta0_mae": 2.247,
+   "by_codec_residual_mae": {
+    "vp9": 0.29,
+    "x265": 0.42,
+    "x264": 0.76,
+    "av1": 1.26
+   },
+   "weakest_cell": "av1|p6|2160 (residual 1.92, n=11 clips, IQR 3.26) - per-cell IQR reported in predict.py output"
+  },
+  "data": "s3://kubakra-videos/ml-crf-vmaf/training_data/preset_delta_v1.0/"
  }
 }

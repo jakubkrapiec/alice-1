@@ -151,7 +151,7 @@ python3 predict.py input.mp4 --codec x265 --target-height 1080 \
 
 Available presets - x264/x265: `veryfast` `fast` `medium` `slow`; vp9: `cu6` `cu4` `cu2`; av1: `p10` `p12` `p8` `p6` (bare numbers work too: `--preset 4` = `cu4` for vp9, `--preset 8` = `p8` for av1). Slower presets shift the CRF up (a more efficient encoder reaches the same VMAF at a higher CRF); the offset shifts the q10-q90 interval as well.
 
-Accuracy of the offsets (leave-one-clip-out validation): median offset error **0.46 CRF** (MAE 0.75) vs 2.29 when the preset is ignored entirely. Tightest for vp9/x265 (<=0.5), widest for av1 (up to ~2 at 1440p/2160p - the printed IQR tells you how much to trust each cell).
+Accuracy of the offsets (leave-one-clip-out validation): median offset error **0.44 CRF** (MAE 0.73) vs 2.25 when the preset is ignored entirely. Tightest for vp9/x265 (<=0.5), widest for av1 (up to ~2 at 1440p/2160p - the printed IQR tells you how much to trust each cell).
 
 Precedence: `--calibration` / `--crf-offset` **replace** the preset offset - a calibration measured with your exact encoder settings already contains the preset effect.
 

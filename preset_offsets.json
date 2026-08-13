@@ -1,0 +1,333 @@
+{
+ "version": "1.0.0",
+ "created_utc": "2026-08-12T17:00:45+00:00",
+ "source": "preset_delta_v1.0.jsonl (Track 2, 5471 rows, 27 clips, run 2026-08-10..12)",
+ "delta_definition": "CRF(preset) - CRF(baseline) at equal VMAF; median over VMAF targets 75-95 and clips",
+ "baseline_presets": {
+  "x264": "veryfast",
+  "x265": "veryfast",
+  "vp9": "cu6",
+  "av1": {
+   "720": "p10",
+   "1080": "p10",
+   "1440": "p12",
+   "2160": "p12"
+  }
+ },
+ "cells": {
+  "av1|p10|1440": {
+   "delta": 1.34,
+   "n_clips": 11,
+   "iqr": 1.49,
+   "min": 0.45,
+   "max": 3.61
+  },
+  "av1|p10|2160": {
+   "delta": 0.95,
+   "n_clips": 11,
+   "iqr": 0.68,
+   "min": -0.12,
+   "max": 3.01
+  },
+  "av1|p12|720": {
+   "delta": -3.38,
+   "n_clips": 27,
+   "iqr": 2.34,
+   "min": -6.26,
+   "max": 0.01
+  },
+  "av1|p12|1080": {
+   "delta": -2.1,
+   "n_clips": 24,
+   "iqr": 2.15,
+   "min": -4.1,
+   "max": 0.15
+  },
+  "av1|p6|720": {
+   "delta": 3.77,
+   "n_clips": 27,
+   "iqr": 2.51,
+   "min": -0.09,
+   "max": 7.4
+  },
+  "av1|p6|1080": {
+   "delta": 3.43,
+   "n_clips": 24,
+   "iqr": 2.05,
+   "min": -0.12,
+   "max": 6.54
+  },
+  "av1|p6|1440": {
+   "delta": 5.42,
+   "n_clips": 11,
+   "iqr": 3.9,
+   "min": 0.74,
+   "max": 7.87
+  },
+  "av1|p6|2160": {
+   "delta": 4.88,
+   "n_clips": 11,
+   "iqr": 3.26,
+   "min": 0.77,
+   "max": 7.6
+  },
+  "av1|p8|720": {
+   "delta": 2.28,
+   "n_clips": 27,
+   "iqr": 2.02,
+   "min": -0.43,
+   "max": 5.85
+  },
+  "av1|p8|1080": {
+   "delta": 2.43,
+   "n_clips": 24,
+   "iqr": 1.87,
+   "min": -0.37,
+   "max": 4.82
+  },
+  "av1|p8|1440": {
+   "delta": 3.81,
+   "n_clips": 11,
+   "iqr": 2.8,
+   "min": 0.84,
+   "max": 6.6
+  },
+  "av1|p8|2160": {
+   "delta": 3.22,
+   "n_clips": 11,
+   "iqr": 3.2,
+   "min": 0.81,
+   "max": 6.41
+  },
+  "vp9|cu2|720": {
+   "delta": 0.71,
+   "n_clips": 27,
+   "iqr": 0.44,
+   "min": -0.03,
+   "max": 2.45
+  },
+  "vp9|cu2|1080": {
+   "delta": 0.69,
+   "n_clips": 24,
+   "iqr": 0.28,
+   "min": -0.16,
+   "max": 1.9
+  },
+  "vp9|cu2|1440": {
+   "delta": 0.64,
+   "n_clips": 11,
+   "iqr": 0.32,
+   "min": -0.03,
+   "max": 1.18
+  },
+  "vp9|cu2|2160": {
+   "delta": 0.64,
+   "n_clips": 9,
+   "iqr": 0.21,
+   "min": 0.31,
+   "max": 0.79
+  },
+  "vp9|cu4|720": {
+   "delta": 0.41,
+   "n_clips": 27,
+   "iqr": 0.58,
+   "min": -0.2,
+   "max": 1.76
+  },
+  "vp9|cu4|1080": {
+   "delta": 0.38,
+   "n_clips": 24,
+   "iqr": 0.42,
+   "min": -0.15,
+   "max": 1.03
+  },
+  "vp9|cu4|1440": {
+   "delta": 0.31,
+   "n_clips": 11,
+   "iqr": 0.5,
+   "min": -0.01,
+   "max": 0.99
+  },
+  "vp9|cu4|2160": {
+   "delta": 0.36,
+   "n_clips": 9,
+   "iqr": 0.28,
+   "min": 0.1,
+   "max": 0.56
+  },
+  "x264|fast|720": {
+   "delta": 2.77,
+   "n_clips": 27,
+   "iqr": 1.23,
+   "min": 0.58,
+   "max": 4.81
+  },
+  "x264|fast|1080": {
+   "delta": 2.93,
+   "n_clips": 24,
+   "iqr": 1.07,
+   "min": 0.4,
+   "max": 4.99
+  },
+  "x264|fast|1440": {
+   "delta": 3.05,
+   "n_clips": 9,
+   "iqr": 1.33,
+   "min": 2.52,
+   "max": 4.38
+  },
+  "x264|fast|2160": {
+   "delta": 3.2,
+   "n_clips": 9,
+   "iqr": 1.35,
+   "min": 2.69,
+   "max": 4.69
+  },
+  "x264|medium|720": {
+   "delta": 3.2,
+   "n_clips": 27,
+   "iqr": 1.36,
+   "min": 0.58,
+   "max": 5.35
+  },
+  "x264|medium|1080": {
+   "delta": 3.07,
+   "n_clips": 24,
+   "iqr": 1.23,
+   "min": 0.41,
+   "max": 5.54
+  },
+  "x264|medium|1440": {
+   "delta": 3.4,
+   "n_clips": 9,
+   "iqr": 1.03,
+   "min": 2.81,
+   "max": 4.45
+  },
+  "x264|medium|2160": {
+   "delta": 3.41,
+   "n_clips": 9,
+   "iqr": 0.81,
+   "min": 2.83,
+   "max": 4.55
+  },
+  "x264|slow|720": {
+   "delta": 3.6,
+   "n_clips": 27,
+   "iqr": 1.07,
+   "min": 0.25,
+   "max": 5.28
+  },
+  "x264|slow|1080": {
+   "delta": 3.25,
+   "n_clips": 24,
+   "iqr": 1.12,
+   "min": 0.04,
+   "max": 5.37
+  },
+  "x264|slow|1440": {
+   "delta": 3.55,
+   "n_clips": 9,
+   "iqr": 0.47,
+   "min": 3.27,
+   "max": 4.26
+  },
+  "x264|slow|2160": {
+   "delta": 3.51,
+   "n_clips": 9,
+   "iqr": 0.26,
+   "min": 2.93,
+   "max": 4.23
+  },
+  "x265|fast|720": {
+   "delta": 0.58,
+   "n_clips": 27,
+   "iqr": 0.59,
+   "min": 0.03,
+   "max": 2.56
+  },
+  "x265|fast|1080": {
+   "delta": 0.44,
+   "n_clips": 24,
+   "iqr": 0.44,
+   "min": 0.02,
+   "max": 2.29
+  },
+  "x265|fast|1440": {
+   "delta": 0.46,
+   "n_clips": 9,
+   "iqr": 0.26,
+   "min": 0.23,
+   "max": 0.98
+  },
+  "x265|fast|2160": {
+   "delta": 0.4,
+   "n_clips": 9,
+   "iqr": 0.33,
+   "min": 0.16,
+   "max": 0.74
+  },
+  "x265|medium|720": {
+   "delta": 1.05,
+   "n_clips": 27,
+   "iqr": 0.73,
+   "min": -0.12,
+   "max": 2.74
+  },
+  "x265|medium|1080": {
+   "delta": 1.25,
+   "n_clips": 24,
+   "iqr": 0.73,
+   "min": -0.15,
+   "max": 2.08
+  },
+  "x265|medium|1440": {
+   "delta": 1.38,
+   "n_clips": 9,
+   "iqr": 0.49,
+   "min": -0.24,
+   "max": 1.97
+  },
+  "x265|medium|2160": {
+   "delta": 1.39,
+   "n_clips": 9,
+   "iqr": 0.43,
+   "min": -0.31,
+   "max": 2.04
+  },
+  "x265|slow|720": {
+   "delta": 3.14,
+   "n_clips": 27,
+   "iqr": 0.85,
+   "min": 2.11,
+   "max": 4.76
+  },
+  "x265|slow|1080": {
+   "delta": 3.2,
+   "n_clips": 24,
+   "iqr": 0.85,
+   "min": 2.18,
+   "max": 4.81
+  },
+  "x265|slow|1440": {
+   "delta": 3.42,
+   "n_clips": 9,
+   "iqr": 1.0,
+   "min": 2.05,
+   "max": 4.0
+  },
+  "x265|slow|2160": {
+   "delta": 3.57,
+   "n_clips": 9,
+   "iqr": 0.66,
+   "min": 1.73,
+   "max": 3.98
+  }
+ },
+ "validation": {
+  "method": "leave-one-clip-out on per-clip median delta",
+  "residual_mae": 0.747,
+  "residual_median": 0.458,
+  "naive_delta0_mae": 2.291
+ }
+}

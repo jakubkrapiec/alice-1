@@ -32,9 +32,12 @@ Since v2.0 the model also consumes probe-encode features: before
 predicting, the script encodes two 2-second probe segments of your video
 at the target resolution (fixed CRF per codec, training-baseline preset),
 measures their VMAF + bitrate, and feeds the two points + slope to the
-model. This is MANDATORY for v2.x models (no fallback) and cuts the E2E
-VMAF error roughly 2.6x vs v1.x (vmaf_mae 3.67 -> 1.35 on the v4 test
-split). v1.x model files (no probe features) keep working unchanged.
+model. The probe is RECOMMENDED (it cuts the E2E VMAF error roughly 2.6x
+vs v1.x: vmaf_mae 3.67 -> 1.35 on the v4 test split) but OPTIONAL — pass
+--no-probe to skip it; the probe features are then filled with neutral
+defaults (probe_vmaf = probe_vmaf2 = target VMAF, slope 0, training-median
+bitrate) and accuracy degrades back towards v1.x levels. v1.x model files
+(no probe features) keep working unchanged.
 
 Requires: ffmpeg + ffprobe + the vmaf CLI on PATH (the vmafmotion filter
 must be compiled into ffmpeg — it is in stock Ubuntu and ffmpeg.org
@@ -76,6 +79,10 @@ FEATURES = BASE_FEATS + DERIVED   # 16 features, v1.x training order
 # v2.0: probe-encode features appended at the end (exact training order:
 # 16 base+derived, then probe_vmaf, probe_vmaf2, probe_slope, probe_log_br)
 PROBE_KEYS = ["probe_vmaf", "probe_vmaf2", "probe_slope", "probe_log_br"]
+
+# Training-set median of probe_log_br (52,316 rows, probe_data.jsonl) —
+# used as the neutral fallback for --no-probe.
+PROBE_LOG_BR_MEDIAN = 6.80
 FEATURES_V2 = FEATURES + PROBE_KEYS
 
 # Probe spec — MUST match collector/generate_probe_dataset.py exactly:
@@ -405,6 +412,11 @@ def main():
                     help="optional: analyze only this many seconds")
     ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--model", default="model.txt")
+    ap.add_argument("--no-probe", action="store_true",
+                    help="v2.x models: skip the probe encode and fill the "
+                         "probe_* features with neutral defaults — faster, "
+                         "no vmaf CLI needed, but accuracy degrades towards "
+                         "v1.x levels (vmaf_mae ~3.7 instead of ~1.35)")
     ap.add_argument("--no-interval", action="store_true",
                     help="point prediction only, skip the q10-q90 interval "
                          "even when model_q10.txt/model_q90.txt are present")
@@ -441,12 +453,26 @@ def main():
                             width, args.target_height)
     model = lgb.Booster(model_file=args.model)
 
-    # v2.0: mandatory probe-encode — the model has probe_* features and
-    # cannot predict without them (no fallback by design)
+    # v2.0: probe-encode — recommended but optional (--no-probe). Without
+    # it the probe_* features get neutral defaults and accuracy degrades
+    # towards v1.x levels.
     probe_feats = None
     if model_needs_probe(model):
-        probe_feats = run_probe(args.video, args.codec, width, args.target_height,
-                                start=args.start or 0.0, threads=args.threads)
+        if args.no_probe:
+            probe_feats = {
+                "probe_vmaf": args.target_vmaf,
+                "probe_vmaf2": args.target_vmaf,
+                "probe_slope": 0.0,
+                "probe_log_br": PROBE_LOG_BR_MEDIAN,
+            }
+            print("warning: --no-probe — probe features filled with neutral "
+                  "defaults; expect v1.x-level accuracy (vmaf_mae ~3.7 "
+                  "instead of ~1.35)", file=sys.stderr)
+        else:
+            probe_feats = run_probe(args.video, args.codec, width,
+                                    args.target_height,
+                                    start=args.start or 0.0,
+                                    threads=args.threads)
         row.update(probe_feats)
     crf, raw = predict_crf(model, row)
 

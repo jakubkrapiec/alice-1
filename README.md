@@ -3,7 +3,7 @@
 **Predict the CRF that hits a target VMAF — before you encode.**
 
 A single LightGBM model that, given cheap content features of a 10-second video
-segment **plus a mandatory 2-second probe encode** (v2.0), a target resolution,
+segment **plus an optional 2-second probe encode** (v2.0, recommended), a target resolution,
 a codec and a desired VMAF score, predicts the CRF value that will produce that
 quality. Covers **x264, x265, VP9 and AV1 (SVT-AV1)**
 at **720p, 1080p, 1440p and 2160p**, for target **VMAF 60–95**.
@@ -49,7 +49,7 @@ lightweight content features that cost **one decode + one filter pass** to compu
 - **Input:** 20 features — content statistics (SI/TI/motion), fps, source &
   target resolution, codec, target VMAF, **and 4 probe-encode features**
   (`probe_vmaf`, `probe_vmaf2`, `probe_slope`, `probe_log_br`) measured from a
-  mandatory 2 s probe encode at the target resolution (two fixed CRFs per codec).
+  2 s probe encode at the target resolution (two fixed CRFs per codec); recommended but optional — `predict.py --no-probe` fills neutral defaults at v1.x-level accuracy.
 - **Output:** predicted CRF (float; round + clamp to the codec's legal range
   before encoding), plus an 80% prediction interval (q10–q90) from the
   bundled quantile models.

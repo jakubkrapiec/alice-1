@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-"""CRF->VMAF predictor — inference example.
+"""CRF -> VMAF predictor - inference example.
 
 Computes content features for a video (whole file by default, or a chosen
-segment) at the target resolution — one ffmpeg pass, same filters as
-training — and predicts the CRF that should produce the requested VMAF score.
+segment) at the target resolution - one ffmpeg pass, same filters as
+training - and predicts the CRF that should produce the requested VMAF score.
 
 Works for videos of any length >= ~3 s: the content features are temporal
-aggregates (mean/std over frames) and the model has no duration input at all
-(the segment_duration feature was pruned in v1.1 — a 150k-row ablation and a
-full retrain both showed it carries no information). A warning is printed
+aggregates (mean/std over frames). A warning is printed
 for analysis windows < 3 s, where frame statistics become noisy.
 
 Usage:
@@ -16,9 +14,7 @@ Usage:
     python predict.py input.mp4 --codec av1 --target-height 2160 --target-vmaf 88 \
         --start 30 --duration 10          # optional: analyze one segment only
 
-Since v1.5.0 the point prediction comes from a quantile (median) model —
-label-space and E2E validation showed it strictly better than the previous
-L2-mean model — and, when model_q10.txt / model_q90.txt are present next to
+When model_q10.txt / model_q90.txt are present next to
 the model file, an 80% prediction interval (CRF q10..q90) is printed too.
 Suppress with --no-interval.
 
@@ -28,21 +24,21 @@ x264/x265 veryfast, vp9 cpu-used 6, av1 p10 (preset 12 at 2160p).
 --calibration / --crf-offset take precedence — they already include the
 preset effect.
 
-Since v2.0 the model also consumes probe-encode features: before
+Since v2.0 the model can also consume probe-encode features: before
 predicting, the script encodes two 2-second probe segments of your video
 at the target resolution (fixed CRF per codec, training-baseline preset),
 measures their VMAF + bitrate, and feeds the two points + slope to the
-model. The probe is RECOMMENDED (it cuts the E2E VMAF error roughly 2.6x
-vs v1.x: vmaf_mae 3.67 -> 1.35 on the v4 test split) but OPTIONAL — pass
---no-probe to skip it; the probe features are then filled with neutral
-defaults (probe_vmaf = probe_vmaf2 = target VMAF, slope 0, training-median
-bitrate) and accuracy degrades back towards v1.x levels. v1.x model files
-(no probe features) keep working unchanged.
+model. The probe is recommended (vmaf_mae 3.67 -> 1.35 on the v4 test
+split) but optional - pass --no-probe to skip it; the probe features are
+then filled with neutral defaults (probe_vmaf = probe_vmaf2 = target VMAF,
+slope 0, training-median bitrate) and accuracy degrades back towards v1.x
+levels. v1.x model files (no probe features) keep working unchanged.
 
-Requires: ffmpeg + ffprobe + the vmaf CLI on PATH (the vmafmotion filter
-must be compiled into ffmpeg — it is in stock Ubuntu and ffmpeg.org
-builds); lightgbm, numpy, pandas. Binary names can be overridden with the
-FFMPEG / FFPROBE / VMAF env vars.
+Requires: ffmpeg + ffprobe on PATH (the vmafmotion filter must be compiled
+in - it is in stock Ubuntu and ffmpeg.org builds); lightgbm, numpy, pandas.
+Binary names can be overridden with the FFMPEG / FFPROBE env vars.
+calibrate.py additionally needs the vmaf CLI; so does the v2.0 probe
+(VMAF env var to override).
 """
 import argparse
 import json
@@ -62,7 +58,7 @@ FFPROBE = os.environ.get("FFPROBE", "ffprobe")
 VMAF_CLI = os.environ.get("VMAF", "vmaf")
 
 # ---------------------------------------------------------------------------
-# Model spec (must match training exactly) — 16 features, v1.1 pruned set
+# Model spec (must match training exactly) - 16 features, v1.1 pruned set
 # ---------------------------------------------------------------------------
 CODEC_CATS = ["av1", "vp9", "x264", "x265"]          # alphabetical == training
 CRF_RANGE = {"x264": (0, 51), "x265": (0, 51), "vp9": (0, 63), "av1": (0, 63)}
@@ -74,20 +70,19 @@ BASE_FEATS = ["si_mean", "si_std", "ti_mean", "ti_std", "vmafmotion",
               "fps", "target_height", "source_height", "target_width",
               "codec", "target_vmaf"]
 DERIVED = ["si_x_ti", "motion_x_ti", "si_cv", "ti_cv", "res_ratio"]
-FEATURES = BASE_FEATS + DERIVED   # 16 features, v1.x training order
+FEATURES = BASE_FEATS + DERIVED   # 16 features, exact training order
 
 # v2.0: probe-encode features appended at the end (exact training order:
 # 16 base+derived, then probe_vmaf, probe_vmaf2, probe_slope, probe_log_br)
 PROBE_KEYS = ["probe_vmaf", "probe_vmaf2", "probe_slope", "probe_log_br"]
 
-# Training-set median of probe_log_br (52,316 rows, probe_data.jsonl) —
+# Training-set median of probe_log_br (52,316 rows, probe_data.jsonl) -
 # used as the neutral fallback for --no-probe.
 PROBE_LOG_BR_MEDIAN = 6.80
-FEATURES_V2 = FEATURES + PROBE_KEYS
 
-# Probe spec — MUST match collector/generate_probe_dataset.py exactly:
+# Probe spec - MUST match collector/generate_probe_dataset.py exactly:
 # 2 s from the analysis start, target WxH (scale decrease + pad, yuv420p),
-# training-baseline presets, VMAF std <=1080p / 4k model >1080p.
+# training-baseline presets, VMAF std model <=1080p / 4k model >1080p.
 PROBE_SEC = 2.0
 PROBE_SPEC = {
     "x264": {"crfs": (28, 34), "args": ["-c:v", "libx264", "-preset", "veryfast"]},
@@ -120,7 +115,7 @@ def parse_fps(rate: str) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Feature extraction — EXACTLY as in training:
+# Feature extraction - EXACTLY as in training:
 # plain bicubic scale to WxH (no aspect preservation / pad here),
 # SI = sobel -> signalstats YAVG, TI = tblend difference -> signalstats YAVG,
 # motion = libvmaf vmafmotion stats file.
@@ -219,7 +214,7 @@ def extract_features(video: str, width: int, height: int,
 
 
 # ---------------------------------------------------------------------------
-# Probe encode (v2.0) — mirrors collector/generate_probe_dataset.py
+# Probe encode (v2.0) - mirrors collector/generate_probe_dataset.py
 # ---------------------------------------------------------------------------
 def _scale_vf(w: int, h: int) -> str:
     return (f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
@@ -278,8 +273,8 @@ def run_probe(video: str, codec: str, width: int, height: int,
               start: float = 0.0, threads: int = 4) -> dict:
     """Two probe encodes -> {probe_vmaf, probe_vmaf2, probe_slope, probe_log_br}.
 
-    Mandatory for v2.0 models. Uses PROBE_SEC seconds from `start`
-    (same analysis start as feature extraction).
+    Recommended for v2.x models (skip with --no-probe). Uses PROBE_SEC
+    seconds from `start` (same analysis start as feature extraction).
     """
     c1, c2 = PROBE_SPEC[codec]["crfs"]
     with tempfile.TemporaryDirectory() as tds:
@@ -414,14 +409,14 @@ def main():
     ap.add_argument("--model", default="model.txt")
     ap.add_argument("--no-probe", action="store_true",
                     help="v2.x models: skip the probe encode and fill the "
-                         "probe_* features with neutral defaults — faster, "
+                         "probe_* features with neutral defaults - faster, "
                          "no vmaf CLI needed, but accuracy degrades towards "
                          "v1.x levels (vmaf_mae ~3.7 instead of ~1.35)")
     ap.add_argument("--no-interval", action="store_true",
                     help="point prediction only, skip the q10-q90 interval "
                          "even when model_q10.txt/model_q90.txt are present")
     ap.add_argument("--calibration", default=None,
-                    help="calibration.json from calibrate.py — adds the "
+                    help="calibration.json from calibrate.py - adds the "
                          "measured CRF offset for your encoder settings")
     ap.add_argument("--preset", default=None,
                     help="encoder preset you will encode with — x264/x265: "
@@ -446,34 +441,32 @@ def main():
 
     if meta["analyzed_seconds"] and meta["analyzed_seconds"] < MIN_RELIABLE_SECONDS:
         print(f"warning: analysis window is only {meta['analyzed_seconds']:.1f} s "
-              f"(< {MIN_RELIABLE_SECONDS:g} s) — frame statistics are noisy, "
+              f"(< {MIN_RELIABLE_SECONDS:g} s) - frame statistics are noisy, "
               f"expect reduced accuracy", file=sys.stderr)
 
     row = build_feature_row(feats, meta, args.codec, args.target_vmaf,
                             width, args.target_height)
     model = lgb.Booster(model_file=args.model)
 
-    # v2.0: probe-encode — recommended but optional (--no-probe). Without
+    # v2.0: probe-encode - recommended but optional (--no-probe). Without
     # it the probe_* features get neutral defaults and accuracy degrades
-    # towards v1.x levels.
-    probe_feats = None
+    # towards v1.x levels. v1.x models (no probe_* features) never probe.
     if model_needs_probe(model):
         if args.no_probe:
-            probe_feats = {
+            row.update({
                 "probe_vmaf": args.target_vmaf,
                 "probe_vmaf2": args.target_vmaf,
                 "probe_slope": 0.0,
                 "probe_log_br": PROBE_LOG_BR_MEDIAN,
-            }
-            print("warning: --no-probe — probe features filled with neutral "
+            })
+            print("warning: --no-probe - probe features filled with neutral "
                   "defaults; expect v1.x-level accuracy (vmaf_mae ~3.7 "
                   "instead of ~1.35)", file=sys.stderr)
         else:
-            probe_feats = run_probe(args.video, args.codec, width,
-                                    args.target_height,
-                                    start=args.start or 0.0,
-                                    threads=args.threads)
-        row.update(probe_feats)
+            row.update(run_probe(args.video, args.codec, width,
+                                 args.target_height,
+                                 start=args.start or 0.0,
+                                 threads=args.threads))
     crf, raw = predict_crf(model, row)
 
     # v1.5.0: 80% prediction interval from sibling quantile models

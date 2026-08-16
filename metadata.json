@@ -1,133 +1,137 @@
 {
- "name": "crf-vmaf-predictor",
- "version": "2.0.0",
- "created": "2026-08-15",
- "changelog": {
-  "1.0.1": "predict.py: whole-file analysis by default, segment_duration fed as constant 10.0, warning for windows < 3 s; model unchanged",
-  "1.1.0": "feature pruning + retrain (137 trees): removed segment_duration, log_si/log_ti/log_motion, pixels (21 -> 16 features); label-space test VMAF MAE 3.65 vs 3.60 (statistically equivalent)",
-  "1.1.1": "docs-only after external review: AV1 preset 10/12 note, CRF-ladder coverage table, corpus attrition note (21.7k -> 18,098), 'Reviewed and rejected' section (sample weighting + aspect feature tested, not adopted); model unchanged",
-  "1.2.0": "calibrate.py added: probe-based calibration for custom encoder settings/presets/builds; predict.py gains --calibration and --crf-offset; FFMPEG/FFPROBE/VMAF env overrides; validated on held-out videos: delta -0.09 for the training preset (sanity), +3.05 for x264 medium; model unchanged",
-  "1.3.0": "model UNCHANGED (old_prod kept): v4 retrain on the v4 table (v3 data + 14,359 hardcontent rows from 410 segments x 16 stress-test videos) evaluated head-to-head on the identical test split and REJECTED - no improvement (overall CRF MAE 1.722 vs 1.712, label-space VMAF MAE 3.67 vs 3.65); metrics.json gains the full experiment record; hardcontent gap quantified (both models -5.1 VMAF bias on hc); reproducible retraining pipeline archived at s3://kubakra-videos/ml-crf-vmaf/v4/",
-  "1.4.0": "preset_delta Track 2 dataset released (v1.0): 5,471 rows = 27 validation clips x 4 codecs x full preset ladders (x264/x265 veryfast/fast/medium/slow, vp9 cu2/cu4/cu6, av1 p6/p8/p10/p12) x 4 resolutions (720p-2160p), measured VMAF + bitrate + encode time per cell; val_coral_b excluded (reference decode failure); 4 rows with vmaf=-1 dropped; dataset + generator + manifest archived at s3://kubakra-videos/ml-crf-vmaf/training_data/preset_delta_v1.0/; model and code unchanged",
-  "1.5.0": "quantile model family: point prediction switched from L2-mean to median (q50) \u2014 label-space test VMAF MAE 3.52 vs 3.65 (-3.7%), E2E head-to-head on 8 unseen videos (307 paired cells): VMAF MAE 4.57 vs 5.12 (-10.7%), better on every codec and resolution, bias +0.15 vs +0.74; ships model_q10.txt/model_q90.txt for an 80% prediction interval (printed by default, --no-interval to suppress); calibration/--crf-offset now shift the interval too; rejected: monotone constraint on target_vmaf (+0.7% MAE cost) and per-codec models (av1/x265 regressions)",
-  "1.6.0": "--preset flag + preset_offsets.json: measured CRF offsets for non-baseline encoder presets, derived from the Track 2 preset_delta v1.0 dataset (44 cells codec x preset x resolution; delta = CRF(preset) - CRF(baseline) at equal VMAF, median over targets 75-95 and clips); leave-one-clip-out validation: residual MAE 0.75 CRF vs 2.29 when ignoring the preset; offsets shift the q10/q90 interval too; --calibration/--crf-offset take precedence (they already include the preset effect); ffmpeg -nostdin fix for scripted use; model unchanged",
-  "2.0.0": "probe-encode features (optional, recommended; --no-probe falls back to neutral defaults): before predicting, predict.py encodes two 2 s probes of the video at the target resolution (fixed CRFs per codec: x264/x265 28/34, vp9/av1 40/46; training-baseline presets), measures VMAF + bitrate with the vmaf CLI, and feeds probe_vmaf/probe_vmaf2/probe_slope/probe_log_br to the model (20 features). Test vmaf_mae 3.67 -> 1.35 (-63%), crf_mae 0.62; by codec: x264 0.52, x265 0.59, vp9 1.29, av1 1.37; q10-q90 interval coverage 70%. Probe data: 40,861 cells (52,316 rows) collected 2026-08-13/14, joined to the v4 table at 98.8% coverage. v1.x model files (no probe features) keep working without the probe. Requires the vmaf CLI on PATH (VMAF env override). E2E check: target VMAF 90 -> predicted CRF 23 -> measured 89.03 (x264@720p). Training: train_v2_final.py (quantile q10/q50/q90, split/seed/config identical to v1.5.0 track3); artifacts at s3://kubakra-videos/ml-crf-vmaf/v2.0/"
- },
- "model": {
-  "file": "model.txt",
-  "format": "LightGBM text",
-  "objective": "quantile (alpha=0.5, median)",
-  "md5": "8612d86c38a428c1b97d76600920cbd8",
-  "size_bytes": 59588475,
-  "trees": 1266,
-  "num_leaves": 511,
-  "learning_rate": 0.03,
-  "lightgbm_version": "4.7.0",
-  "internal_lineage": "model_v2_q50 (train_v2_final.py, table v4 + probe_data.jsonl, split/seed/config identical to v1.5.0 track3)",
-  "features": "20 = 16 base (v1.1 pruned set) + probe_vmaf, probe_vmaf2, probe_slope, probe_log_br"
- },
- "training": {
-  "rows": 1731985,
-  "unique_source_videos": 18098,
-  "measured_curves": 53578,
-  "split": "80/10/10 train/val/test by source_key (md5 hash)",
-  "datasets": {
-   "main": "38,151 segments @720p x264, jittered 6-point CRF ladder 18-43",
-   "multicodec": "3,891 segment x resolution rows, 4 codecs, 5-point CRF ladders (x264/x265: 18-40, vp9/av1: 30-63)"
+  "name": "crf-vmaf-predictor",
+  "version": "2.0.0",
+  "created": "2026-08-15",
+  "changelog": {
+    "1.0.1": "predict.py: whole-file analysis by default, segment_duration fed as constant 10.0, warning for windows < 3 s; model unchanged",
+    "1.1.0": "feature pruning + retrain (137 trees): removed segment_duration, log_si/log_ti/log_motion, pixels (21 -> 16 features); label-space test VMAF MAE 3.65 vs 3.60 (statistically equivalent)",
+    "1.1.1": "docs-only after external review: AV1 preset 10/12 note, CRF-ladder coverage table, corpus attrition note (21.7k -> 18,098), 'Reviewed and rejected' section (sample weighting + aspect feature tested, not adopted); model unchanged",
+    "1.2.0": "calibrate.py added: probe-based calibration for custom encoder settings/presets/builds; predict.py gains --calibration and --crf-offset; FFMPEG/FFPROBE/VMAF env overrides; validated on held-out videos: delta -0.09 for the training preset (sanity), +3.05 for x264 medium; model unchanged",
+    "1.3.0": "model UNCHANGED (old_prod kept): v4 retrain on the v4 table (v3 data + 14,359 hardcontent rows from 410 segments x 16 stress-test videos) evaluated head-to-head on the identical test split and REJECTED - no improvement (overall CRF MAE 1.722 vs 1.712, label-space VMAF MAE 3.67 vs 3.65); metrics.json gains the full experiment record; hardcontent gap quantified (both models -5.1 VMAF bias on hc); reproducible retraining pipeline archived at s3://kubakra-videos/ml-crf-vmaf/v4/",
+    "1.4.0": "preset_delta Track 2 dataset released (v1.0): 5,471 rows = 27 validation clips x 4 codecs x full preset ladders (x264/x265 veryfast/fast/medium/slow, vp9 cu2/cu4/cu6, av1 p6/p8/p10/p12) x 4 resolutions (720p-2160p), measured VMAF + bitrate + encode time per cell; val_coral_b excluded (reference decode failure); 4 rows with vmaf=-1 dropped; dataset + generator + manifest archived at s3://kubakra-videos/ml-crf-vmaf/training_data/preset_delta_v1.0/; model and code unchanged",
+    "1.5.0": "quantile model family: point prediction switched from L2-mean to median (q50) - label-space test VMAF MAE 3.52 vs 3.65 (-3.7%), E2E head-to-head on 8 unseen videos (307 paired cells): VMAF MAE 4.57 vs 5.12 (-10.7%), better on every codec and resolution, bias +0.15 vs +0.74; ships model_q10.txt/model_q90.txt for an 80% prediction interval (printed by default, --no-interval to suppress); calibration/--crf-offset now shift the interval too; rejected: monotone constraint on target_vmaf (+0.7% MAE cost) and per-codec models (av1/x265 regressions)",
+    "1.6.0": "--preset flag + preset_offsets.json: measured CRF offsets for non-baseline encoder presets, derived from the Track 2 preset_delta v1.0 dataset (44 cells codec x preset x resolution; delta = CRF(preset) - CRF(baseline) at equal VMAF, median over targets 75-95 and clips); leave-one-clip-out validation: residual MAE 0.73 CRF (median 0.44) vs 2.25 when ignoring the preset; offsets shift the q10/q90 interval too; --calibration/--crf-offset take precedence (they already include the preset effect); ffmpeg -nostdin fix for scripted use; model unchanged",
+    "2.0.0": "probe-encode features (optional, recommended; --no-probe falls back to neutral defaults): before predicting, predict.py encodes two 2 s probes of the video at the target resolution (fixed CRFs per codec: x264/x265 28/34, vp9/av1 40/46; training-baseline presets), measures VMAF + bitrate with the vmaf CLI, and feeds probe_vmaf/probe_vmaf2/probe_slope/probe_log_br to the model (20 features). Test vmaf_mae 3.67 -> 1.35 (-63%), crf_mae 0.62; by codec: x264 0.52, x265 0.59, vp9 1.29, av1 1.37; q10-q90 interval coverage 70%. Probe data: 40,861 cells (52,316 rows) collected 2026-08-13/14, joined to the v4 table at 98.8% coverage. v1.x model files (no probe features) keep working without the probe. Probe requires the vmaf CLI on PATH (VMAF env override). E2E check: target VMAF 90 -> predicted CRF 23 -> measured 89.03 (x264@720p). Training: train_v2_final.py (quantile q10/q50/q90, split/seed/config identical to v1.5.0 track3); artifacts at s3://kubakra-videos/ml-crf-vmaf/v2.0/"
   },
-  "label_generation": "per-segment logistic CRF->VMAF fit (99.8% logistic, 0.2% linear fallback), inverted for integer targets 60-95, kept only within measured CRF ladder"
- },
- "codecs": [
-  "x264",
-  "x265",
-  "vp9",
-  "av1"
- ],
- "resolutions": [
-  720,
-  1080,
-  1440,
-  2160
- ],
- "target_vmaf_range": [
-  60,
-  95
- ],
- "environment_trained": {
-  "ffmpeg": "6.1.1-3ubuntu5",
-  "vmaf_models": {
-   "<=1080p": "vmaf_v0.6.1",
-   ">=1440p": "vmaf_4k_v0.6.1"
+  "model": {
+    "file": "model.txt",
+    "format": "LightGBM text",
+    "objective": "quantile (alpha=0.5, median)",
+    "md5": "8612d86c38a428c1b97d76600920cbd8",
+    "size_bytes": 59588475,
+    "trees": 1266,
+    "num_leaves": 511,
+    "learning_rate": 0.03,
+    "lightgbm_version": "4.7.0",
+    "internal_lineage": "model_v2_q50 (train_v2_final.py, table v4 + probe_data.jsonl, split/seed/config identical to v1.5.0 track3)",
+    "features": "20 = 16 base (v1.1 pruned set) + probe_vmaf, probe_vmaf2, probe_slope, probe_log_br"
   },
-  "os": "Ubuntu 24.04 (GCP n2, 16 vCPU)"
- },
- "preset_offsets": {
-  "file": "preset_offsets.json",
-  "version": "1.0.0",
-  "md5": "c7fe57882131c674540452ac5bbbb825",
-  "size_bytes": 5400,
-  "cells": 44,
-  "source": "preset_delta_v1.0.jsonl (Track 2, 5,471 rows, 27 clips)",
-  "delta_definition": "CRF(preset) - CRF(baseline) at equal VMAF; median over VMAF targets 75-95 and clips",
-  "baseline_presets": {
-   "x264": "veryfast",
-   "x265": "veryfast",
-   "vp9": "cu6",
-   "av1": {
-    "720": "p10",
-    "1080": "p10",
-    "1440": "p10",
-    "2160": "p12"
-   }
+  "training": {
+    "rows": 1731985,
+    "unique_source_videos": 18098,
+    "measured_curves": 53578,
+    "split": "80/10/10 train/val/test by source_key (md5 hash)",
+    "datasets": {
+      "main": "38,151 segments @720p x264, jittered 6-point CRF ladder 18-43",
+      "multicodec": "3,891 segment x resolution rows, 4 codecs, 5-point CRF ladders (x264/x265: 18-40, vp9/av1: 30-63)"
+    },
+    "label_generation": "per-segment logistic CRF->VMAF fit (99.8% logistic, 0.2% linear fallback), inverted for integer targets 60-95, kept only within measured CRF ladder"
   },
-  "loo_validation": {
-   "residual_mae": 0.725,
-   "residual_median": 0.442,
-   "naive_delta0_mae": 2.247
+  "codecs": [
+    "x264",
+    "x265",
+    "vp9",
+    "av1"
+  ],
+  "resolutions": [
+    720,
+    1080,
+    1440,
+    2160
+  ],
+  "target_vmaf_range": [
+    60,
+    95
+  ],
+  "environment_trained": {
+    "ffmpeg": "6.1.1-3ubuntu5",
+    "vmaf_models": {
+      "<=1080p": "vmaf_v0.6.1",
+      ">=1440p": "vmaf_4k_v0.6.1"
+    },
+    "os": "Ubuntu 24.04 (GCP n2, 16 vCPU)"
+  },
+  "interval_models": {
+    "note": "80% prediction interval for CRF, loaded automatically by predict.py when present next to model.txt",
+    "q10": {
+      "file": "model_q10.txt",
+      "md5": "8526471c75ceb68726a61e3561adca79",
+      "size_bytes": 8175404,
+      "trees": 175,
+      "objective": "quantile alpha=0.1"
+    },
+    "q90": {
+      "file": "model_q90.txt",
+      "md5": "bbb7c85630448200c5a5d0451e728869",
+      "size_bytes": 11318888,
+      "trees": 246,
+      "objective": "quantile alpha=0.9"
+    }
+  },
+  "preset_offsets": {
+    "file": "preset_offsets.json",
+    "version": "1.0.0",
+    "md5": "c7fe57882131c674540452ac5bbbb825",
+    "size_bytes": 5400,
+    "cells": 44,
+    "source": "preset_delta_v1.0.jsonl (Track 2, 5,471 rows, 27 clips)",
+    "delta_definition": "CRF(preset) - CRF(baseline) at equal VMAF; median over VMAF targets 75-95 and clips",
+    "baseline_presets": {
+      "x264": "veryfast",
+      "x265": "veryfast",
+      "vp9": "cu6",
+      "av1": {
+        "720": "p10",
+        "1080": "p10",
+        "1440": "p10",
+        "2160": "p12"
+      }
+    },
+    "loo_validation": {
+      "residual_mae": 0.725,
+      "residual_median": 0.442,
+      "naive_delta0_mae": 2.247
+    }
+  },
+  "probe": {
+    "mandatory": false,
+    "seconds": 2.0,
+    "crfs": {
+      "x264": [
+        28,
+        34
+      ],
+      "x265": [
+        28,
+        34
+      ],
+      "vp9": [
+        40,
+        46
+      ],
+      "av1": [
+        40,
+        46
+      ]
+    },
+    "presets": {
+      "x264": "veryfast",
+      "x265": "veryfast",
+      "vp9": "cpu-used 6",
+      "av1": "p10 (p12 at 2160p)"
+    },
+    "vmaf_model": "vmaf_v0.6.1 <=1080p, vmaf_4k_v0.6.1 >1080p",
+    "requires": "vmaf CLI on PATH",
+    "fallback": "--no-probe: probe_vmaf=probe_vmaf2=target, probe_slope=0, probe_log_br=6.80 (training median); accuracy degrades to v1.x level"
   }
- },
- "interval_models": {
-  "q10": {
-   "file": "model_q10.txt",
-   "md5": "e63057367a959405b6f615b7a6743637",
-   "trees": 514
-  },
-  "q90": {
-   "file": "model_q90.txt",
-   "md5": "299ba828edb65fa709672c1eef98510e",
-   "trees": 430
-  },
-  "note": "80% prediction interval (CRF q10..q90); coverage 70% on the v4 test split"
- },
- "probe": {
-  "mandatory": false,
-  "seconds": 2.0,
-  "crfs": {
-   "x264": [
-    28,
-    34
-   ],
-   "x265": [
-    28,
-    34
-   ],
-   "vp9": [
-    40,
-    46
-   ],
-   "av1": [
-    40,
-    46
-   ]
-  },
-  "presets": {
-   "x264": "veryfast",
-   "x265": "veryfast",
-   "vp9": "cpu-used 6",
-   "av1": "p10 (p12 at 2160p)"
-  },
-  "vmaf_model": "vmaf_v0.6.1 <=1080p, vmaf_4k_v0.6.1 >1080p",
-  "requires": "vmaf CLI on PATH",
-  "fallback": "--no-probe: probe_vmaf=probe_vmaf2=target, probe_slope=0, probe_log_br=6.80 (training median); accuracy degrades to v1.x level"
- }
 }

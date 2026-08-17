@@ -114,6 +114,17 @@ def parse_fps(rate: str) -> float:
         return 0.0
 
 
+def _ff_path(p) -> str:
+    """Escape a filesystem path for embedding inside an ffmpeg filter graph.
+
+    Filter syntax uses ':' as option separator and '\\' as escape char, so a
+    raw Windows path (C:\\Users\\..) breaks parsing or corrupts the filename.
+    Convert to forward slashes, then escape ':'.  POSIX paths pass through
+    unchanged.
+    """
+    return str(p).replace("\\", "/").replace(":", "\\:")
+
+
 # ---------------------------------------------------------------------------
 # Feature extraction - EXACTLY as in training:
 # plain bicubic scale to WxH (no aspect preservation / pad here),
@@ -177,12 +188,13 @@ def extract_features(video: str, width: int, height: int,
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         si_file, ti_file, vm_file = td / "si.txt", td / "ti.txt", td / "vm.txt"
+        si_f, ti_f, vm_f = _ff_path(si_file), _ff_path(ti_file), _ff_path(vm_file)
         fc = (
             f"[0:v]scale={width}:{height}:flags=bicubic,split=3[a][b][c];"
-            f"[a]sobel,signalstats,metadata=mode=print:file={si_file}:direct=1[aout];"
+            f"[a]sobel,signalstats,metadata=mode=print:file={si_f}:direct=1[aout];"
             f"[b]tblend=all_mode=difference,signalstats,"
-            f"metadata=mode=print:file={ti_file}:direct=1[bout];"
-            f"[c]vmafmotion=stats_file={vm_file}[cout]"
+            f"metadata=mode=print:file={ti_f}:direct=1[bout];"
+            f"[c]vmafmotion=stats_file={vm_f}[cout]"
         )
         r = subprocess.run(
             [FFMPEG, "-y", "-v", "error", "-nostdin",

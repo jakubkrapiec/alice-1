@@ -1,0 +1,65 @@
+{
+ "features": [
+  "si_mean",
+  "si_std",
+  "ti_mean",
+  "ti_std",
+  "vmafmotion",
+  "fps",
+  "target_height",
+  "source_height",
+  "target_width",
+  "codec",
+  "target_vmaf",
+  "si_x_ti",
+  "motion_x_ti",
+  "si_cv",
+  "ti_cv",
+  "res_ratio",
+  "probe_vmaf",
+  "probe_vmaf2",
+  "probe_slope",
+  "probe_log_br"
+ ],
+ "probe_mandatory": false,
+ "experiments": {
+  "v2_quantile": {
+   "crf_mae": 0.6246,
+   "vmaf_mae": 1.3538,
+   "vmaf_bias": -0.0915,
+   "hit_pm1": 0.5998,
+   "hit_pm2": 0.8054,
+   "hit_pm5": 0.9623,
+   "coverage_q10_q90": 0.6991,
+   "crf_mae_by_codec": {
+    "av1": 1.3716,
+    "vp9": 1.2891,
+    "x264": 0.5214,
+    "x265": 0.5928
+   }
+  }
+ },
+ "probe_gain_share_q50": 0.3659,
+ "feature_importance_q50": {
+  "target_vmaf": 0.3497,
+  "probe_vmaf2": 0.1979,
+  "probe_slope": 0.0698,
+  "probe_vmaf": 0.0692,
+  "codec": 0.0358,
+  "probe_log_br": 0.0291,
+  "si_mean": 0.0277,
+  "ti_cv": 0.0264,
+  "ti_std": 0.0264,
+  "si_std": 0.0264,
+  "si_cv": 0.0264,
+  "vmafmotion": 0.0262,
+  "ti_mean": 0.0247,
+  "si_x_ti": 0.0209,
+  "motion_x_ti": 0.0162,
+  "fps": 0.0133,
+  "source_height": 0.0071,
+  "res_ratio": 0.0037,
+  "target_height": 0.0028,
+  "target_width": 0.0006
+ }
+}

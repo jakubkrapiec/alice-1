@@ -29,15 +29,15 @@ Trained on 1.73M samples derived from 53.5k measured CRF -> VMAF curves across 1
 
 Per-title and per-scene encoding pipelines need to know, for a given chunk of content, resolution and codec, which CRF produces a given VMAF. Solving this by brute force (even by using binary search) means encoding each segment at several CRFs and measuring VMAF, which is expensive. This model answers it in milliseconds from lightweight content features that cost one decode plus one filter pass to compute, with no encoding required.
 
-- **Input:** 16 features - content statistics (SI/TI/motion), fps, source and target resolution, codec, target VMAF.
+- **Input:** 20 features - content statistics (SI/TI/motion), fps, source and target resolution, codec, target VMAF, and 4 probe-encode features (`probe_vmaf`, `probe_vmaf2`, `probe_slope`, `probe_log_br`) measured from a 2 s probe encode at the target resolution (v2.0; recommended but optional - `predict.py --no-probe` fills neutral defaults at v1.x-level accuracy).
 - **Output:** predicted CRF (float; round and clamp to the codec's legal range before encoding), plus an 80% prediction interval (q10–q90) from the bundled quantile models.
-- **Model:** LightGBM GBDT quantile family (v1.5.0). Point prediction is the median (q50), 377 trees, 511 leaves, text format (`model.txt`, 17.8 MB). Interval bounds live in `model_q10.txt` / `model_q90.txt`. Built with LightGBM 4.7.
+- **Model:** LightGBM GBDT quantile family (v2.0.0). Point prediction is the median (q50), 1,266 trees, 511 leaves, text format (`model.txt`, 59.6 MB). Interval bounds live in `model_q10.txt` / `model_q90.txt`. Built with LightGBM 4.7.
 
 Typical use case: a per-title ladder generator or a per-scene constrained-quality encoder controller.
 
 ## Quick start
 
-Requirements: Python 3.10+, `lightgbm`, `numpy`, `pandas`, and an `ffmpeg` binary with `libvmaf` (`vmafmotion` filter) on `$PATH`.
+Requirements: Python 3.10+, `lightgbm`, `numpy`, `pandas`, and an `ffmpeg` binary with `libvmaf` (`vmafmotion` filter) on `$PATH`. The v2.0 probe encode additionally needs the `vmaf` CLI on `$PATH` (or pass `--no-probe` to skip the probe).
 
 ```bash
 pip install -r requirements.txt
@@ -88,8 +88,14 @@ All content features are computed on the target-resolution segment, after bicubi
 | 10 | `codec` | Categorical: `av1`, `vp9`, `x264`, `x265`. |
 | 11 | `target_vmaf` | Desired VMAF score (60–95). |
 | 12–16 | derived | `si_x_ti=si_mean·ti_mean`, `motion_x_ti=vmafmotion·ti_mean`, `si_cv=si_std/(si_mean+1e-6)`, `ti_cv=ti_std/(ti_mean+1e-6)`, `res_ratio=source_height/target_height` |
+| 17–20 | probe (v2.0) | `probe_vmaf`, `probe_vmaf2` = VMAF of two 2 s probe encodes at fixed CRFs (x264/x265: 28/34, vp9/av1: 40/46, training-baseline presets), `probe_slope` = their VMAF slope per CRF point, `probe_log_br` = log1p of the first probe's bitrate (kbps) |
 
-`predict.py` computes all of these for you.
+`predict.py` computes all of these for you. The probe features come from
+`run_probe()` (two 2 s encodes + VMAF measurements, a few seconds of extra
+work); with `--no-probe` they are filled with neutral defaults
+(`probe_vmaf` = `probe_vmaf2` = target VMAF, slope 0, training-median
+bitrate) and accuracy degrades to v1.x levels. Model files without `probe_*`
+features (v1.x) never trigger the probe.
 
 ## Video length
 
@@ -174,20 +180,18 @@ Predicted CRF is mapped back to VMAF via the segment's fitted curve and compared
 
 | Metric         | Value |
 | -------------- | -------------------- |
-| VMAF MAE       | 3.52                 |
-| VMAF bias      | +0.14                |
-| CRF MAE        | 1.66                 |
-| within ±1 VMAF | 26.2%                |
-| within ±2 VMAF | 43.4%                |
-| within ±5 VMAF | 76.0%                |
+| VMAF MAE       | 1.35                 |
+| CRF MAE        | 0.62                 |
+| within ±2 VMAF | 80.5%                |
+
+Per-codec CRF MAE: x264 0.52, x265 0.59, vp9 1.29, av1 1.37. The probe
+features cut the label-space VMAF MAE from 3.67 to 1.35.
 
 #### 80% prediction interval (q10–q90, label-space)
 
 | Metric                 | Value           |
 | ---------------------- | --------------- |
-| Coverage (nominal 80%) | 74.3%           |
-| Mean / median width    | 4.90 / 4.19 CRF |
-| Bound crossings        | 0%              |
+| Coverage (nominal 80%) | 69.9%           |
 
 ## Strengths
 
@@ -212,7 +216,7 @@ Predicted CRF is mapped back to VMAF via the segment's fitted curve and compared
 
 | File | Description |
 |------|-------------|
-| `model.txt` | LightGBM quantile-median (q50) model (text format), 377 trees - the predictor. |
+| `model.txt` | LightGBM quantile-median (q50) model (text format), 1,266 trees - the predictor. |
 | `model_q10.txt` | Quantile q10 model - lower bound of the 80% prediction interval. |
 | `model_q90.txt` | Quantile q90 model - upper bound of the 80% prediction interval. |
 | `README.md` | This document. |
@@ -222,6 +226,7 @@ Predicted CRF is mapped back to VMAF via the segment's fitted curve and compared
 | `features.json` | Machine-readable feature spec: order, derived formulas, codec categories, CRF ranges. |
 | `training_videos.txt` | All 18,098 source videos used for training (one `source_key` per line). |
 | `metrics.json` | Full evaluation results (label-space test + end-to-end validation). |
+| `metrics_v2.json` | v2.0 evaluation results (label-space test, probe-feature metrics). |
 | `metadata.json` | Version, build date, checksums, library versions. |
 | `requirements.txt` | Python dependencies for `predict.py`. |
 | `LICENSE` | License of this package. |

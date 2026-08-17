@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CRF -> VMAF predictor - inference example.
+"""CRF -> VMAF predictor - inference script.
 
 Computes content features for a video (whole file by default, or a chosen
 segment) at the target resolution - one ffmpeg pass, same filters as
@@ -21,13 +21,24 @@ Suppress with --no-interval.
 --preset applies a measured CRF offset (preset_offsets.json next to the
 model) when you encode with a non-baseline preset; training baselines:
 x264/x265 veryfast, vp9 cpu-used 6, av1 p10 (preset 12 at 2160p).
---calibration / --crf-offset take precedence — they already include the
+--calibration / --crf-offset take precedence - they already include the
 preset effect.
+
+The model can also consume probe-encode features: before
+predicting, the script encodes two 2-second probe segments of your video
+at the target resolution (fixed CRF per codec, training-baseline preset),
+measures their VMAF + bitrate, and feeds the two points + slope to the
+model. The probe is recommended (vmaf_mae 3.67 -> 1.35 on the test
+split) but optional - pass --no-probe to skip it; the probe features are
+then filled with neutral defaults (probe_vmaf = probe_vmaf2 = target VMAF,
+slope 0, training-median bitrate) and accuracy degrades back towards v1.x
+levels. v1.x model files (no probe features) keep working unchanged.
 
 Requires: ffmpeg + ffprobe on PATH (the vmafmotion filter must be compiled
 in - it is in stock Ubuntu and ffmpeg.org builds); lightgbm, numpy, pandas.
 Binary names can be overridden with the FFMPEG / FFPROBE env vars.
-calibrate.py additionally needs the vmaf CLI.
+calibrate.py additionally needs the vmaf CLI; so does the v2.0 probe
+(VMAF env var to override).
 """
 import argparse
 import json
@@ -44,6 +55,7 @@ import lightgbm as lgb
 
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
 FFPROBE = os.environ.get("FFPROBE", "ffprobe")
+VMAF_CLI = os.environ.get("VMAF", "vmaf")
 
 # ---------------------------------------------------------------------------
 # Model spec (must match training exactly) - 16 features, v1.1 pruned set
@@ -59,6 +71,28 @@ BASE_FEATS = ["si_mean", "si_std", "ti_mean", "ti_std", "vmafmotion",
               "codec", "target_vmaf"]
 DERIVED = ["si_x_ti", "motion_x_ti", "si_cv", "ti_cv", "res_ratio"]
 FEATURES = BASE_FEATS + DERIVED   # 16 features, exact training order
+
+# v2.0: probe-encode features appended at the end (exact training order:
+# 16 base+derived, then probe_vmaf, probe_vmaf2, probe_slope, probe_log_br)
+PROBE_KEYS = ["probe_vmaf", "probe_vmaf2", "probe_slope", "probe_log_br"]
+
+# Training-set median of probe_log_br (52,316 rows, probe_data.jsonl) -
+# used as the neutral fallback for --no-probe.
+PROBE_LOG_BR_MEDIAN = 6.80
+
+# Probe spec - MUST match collector/generate_probe_dataset.py exactly:
+# 2 s from the analysis start, target WxH (scale decrease + pad, yuv420p),
+# training-baseline presets, VMAF std model <=1080p / 4k model >1080p.
+PROBE_SEC = 2.0
+PROBE_SPEC = {
+    "x264": {"crfs": (28, 34), "args": ["-c:v", "libx264", "-preset", "veryfast"]},
+    "x265": {"crfs": (28, 34), "args": ["-c:v", "libx265", "-preset", "veryfast"]},
+    "vp9":  {"crfs": (40, 46), "args": ["-c:v", "libvpx-vp9", "-b:v", "0",
+                                         "-cpu-used", "6", "-row-mt", "1",
+                                         "-deadline", "good"]},
+    "av1":  {"crfs": (40, 46), "args": ["-c:v", "libsvtav1", "-preset", "10"],
+             "args_4k": ["-c:v", "libsvtav1", "-preset", "12"]},
+}
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +214,98 @@ def extract_features(video: str, width: int, height: int,
 
 
 # ---------------------------------------------------------------------------
+# Probe encode (v2.0) - mirrors collector/generate_probe_dataset.py
+# ---------------------------------------------------------------------------
+def _scale_vf(w: int, h: int) -> str:
+    return (f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,format=yuv420p")
+
+
+def _probe_one(video: str, start: float, w: int, h: int, codec: str,
+               crf: int, ref_yuv: Path, td: Path, threads: int) -> dict:
+    """One probe encode + VMAF/bitrate measurement. Returns dict."""
+    cfg = PROBE_SPEC[codec]
+    cfg_args = cfg["args"]
+    if h >= 2160 and "args_4k" in cfg:
+        cfg_args = cfg["args_4k"]
+    enc_out = td / f"probe_{codec}_{crf}.mkv"
+    dis_yuv = td / f"dis_{codec}_{crf}.yuv"
+    vmaf_json = td / f"vmaf_{codec}_{crf}.json"
+    r = subprocess.run(
+        [FFMPEG, "-y", "-v", "error", "-nostdin",
+         "-threads", str(threads), "-filter_threads", str(threads),
+         "-ss", f"{start:.3f}", "-i", video, "-t", f"{PROBE_SEC:.3f}",
+         "-vf", _scale_vf(w, h)] + cfg_args +
+        ["-crf", str(crf), "-an", "-threads", str(threads), str(enc_out)],
+        capture_output=True, text=True, timeout=900)
+    if r.returncode != 0:
+        raise RuntimeError(f"probe encode failed ({codec} crf={crf}): "
+                           f"{(r.stderr or '')[-300:]}")
+    dec = subprocess.run(
+        [FFMPEG, "-y", "-v", "error", "-nostdin", "-i", str(enc_out),
+         "-pix_fmt", "yuv420p", "-f", "rawvideo", str(dis_yuv)],
+        capture_output=True, text=True, timeout=300)
+    if dec.returncode != 0:
+        raise RuntimeError(f"probe decode failed ({codec} crf={crf}): "
+                           f"{(dec.stderr or '')[-300:]}")
+    vmaf_model = "version=vmaf_4k_v0.6.1" if h > 1080 else "version=vmaf_v0.6.1"
+    vp = subprocess.run(
+        [VMAF_CLI, "-r", str(ref_yuv), "-d", str(dis_yuv),
+         "-w", str(w), "-h", str(h), "-p", "420", "-b", "8",
+         "-m", vmaf_model, "--threads", str(threads),
+         "--json", "-o", str(vmaf_json)],
+        capture_output=True, text=True, timeout=900)
+    if vp.returncode != 0 or not vmaf_json.exists():
+        raise RuntimeError(f"vmaf CLI failed ({codec} crf={crf}): "
+                           f"{(vp.stderr or '')[-300:]}")
+    data = json.loads(vmaf_json.read_text())
+    vs = [f["metrics"]["vmaf"] for f in data.get("frames", [])
+          if "vmaf" in f.get("metrics", {})]
+    if vs:
+        vmaf = sum(vs) / len(vs)
+    else:
+        vmaf = float(data["pooled_metrics"]["vmaf"]["mean"])
+    kbps = enc_out.stat().st_size * 8 / PROBE_SEC / 1000.0
+    return {"crf": crf, "vmaf": vmaf, "bitrate_kbps": kbps}
+
+
+def run_probe(video: str, codec: str, width: int, height: int,
+              start: float = 0.0, threads: int = 4) -> dict:
+    """Two probe encodes -> {probe_vmaf, probe_vmaf2, probe_slope, probe_log_br}.
+
+    Recommended for v2.x models (skip with --no-probe). Uses PROBE_SEC
+    seconds from `start` (same analysis start as feature extraction).
+    """
+    c1, c2 = PROBE_SPEC[codec]["crfs"]
+    with tempfile.TemporaryDirectory() as tds:
+        td = Path(tds)
+        ref_yuv = td / "ref.yuv"
+        r = subprocess.run(
+            [FFMPEG, "-y", "-v", "error", "-nostdin",
+             "-ss", f"{start:.3f}", "-i", video, "-t", f"{PROBE_SEC:.3f}",
+             "-vf", _scale_vf(width, height),
+             "-pix_fmt", "yuv420p", "-f", "rawvideo", str(ref_yuv)],
+            capture_output=True, text=True, timeout=600)
+        if r.returncode != 0 or not ref_yuv.exists() or ref_yuv.stat().st_size == 0:
+            raise RuntimeError(f"probe reference decode failed: "
+                               f"{(r.stderr or '')[-300:]}")
+        p1 = _probe_one(video, start, width, height, codec, c1, ref_yuv, td, threads)
+        p2 = _probe_one(video, start, width, height, codec, c2, ref_yuv, td, threads)
+    v1, v2 = p1["vmaf"], p2["vmaf"]
+    return {
+        "probe_vmaf": round(v1, 4),
+        "probe_vmaf2": round(v2, 4),
+        "probe_slope": round((v1 - v2) / (c2 - c1), 4),
+        "probe_log_br": round(float(np.log1p(max(p1["bitrate_kbps"], 0))), 4),
+    }
+
+
+def model_needs_probe(model: lgb.Booster) -> bool:
+    """v2.x models have probe_* features; v1.x don't."""
+    return any(f.startswith("probe_") for f in model.feature_name())
+
+
+# ---------------------------------------------------------------------------
 # Feature row + prediction
 # ---------------------------------------------------------------------------
 def build_feature_row(feats: dict, meta: dict, codec: str, target_vmaf: float,
@@ -226,7 +352,7 @@ def predict_crf(model: lgb.Booster, row: dict) -> tuple:
     """Returns (crf_int, crf_raw)."""
     df = pd.DataFrame([row])
     df["codec"] = pd.Categorical(df["codec"], categories=CODEC_CATS)
-    raw = float(model.predict(df[FEATURES])[0])
+    raw = float(model.predict(df[model.feature_name()])[0])
     lo, hi = CRF_RANGE[row["codec"]]
     return int(round(min(max(raw, lo), hi))), raw
 
@@ -281,6 +407,11 @@ def main():
                     help="optional: analyze only this many seconds")
     ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--model", default="model.txt")
+    ap.add_argument("--no-probe", action="store_true",
+                    help="v2.x models: skip the probe encode and fill the "
+                         "probe_* features with neutral defaults - faster, "
+                         "no vmaf CLI needed, but accuracy degrades towards "
+                         "v1.x levels (vmaf_mae ~3.7 instead of ~1.35)")
     ap.add_argument("--no-interval", action="store_true",
                     help="point prediction only, skip the q10-q90 interval "
                          "even when model_q10.txt/model_q90.txt are present")
@@ -316,6 +447,26 @@ def main():
     row = build_feature_row(feats, meta, args.codec, args.target_vmaf,
                             width, args.target_height)
     model = lgb.Booster(model_file=args.model)
+
+    # v2.0: probe-encode - recommended but optional (--no-probe). Without
+    # it the probe_* features get neutral defaults and accuracy degrades
+    # towards v1.x levels. v1.x models (no probe_* features) never probe.
+    if model_needs_probe(model):
+        if args.no_probe:
+            row.update({
+                "probe_vmaf": args.target_vmaf,
+                "probe_vmaf2": args.target_vmaf,
+                "probe_slope": 0.0,
+                "probe_log_br": PROBE_LOG_BR_MEDIAN,
+            })
+            print("warning: --no-probe - probe features filled with neutral "
+                  "defaults; expect v1.x-level accuracy (vmaf_mae ~3.7 "
+                  "instead of ~1.35)", file=sys.stderr)
+        else:
+            row.update(run_probe(args.video, args.codec, width,
+                                 args.target_height,
+                                 start=args.start or 0.0,
+                                 threads=args.threads))
     crf, raw = predict_crf(model, row)
 
     # v1.5.0: 80% prediction interval from sibling quantile models

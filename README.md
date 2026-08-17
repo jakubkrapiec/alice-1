@@ -184,9 +184,8 @@ Predicted CRF is mapped back to VMAF via the segment's fitted curve and compared
 | CRF MAE        | 0.62                 |
 | within ±2 VMAF | 80.5%                |
 
-Per-codec CRF MAE: x264 0.52, x265 0.59, vp9 1.29, av1 1.37. The v2.0 probe
-features cut the label-space VMAF MAE from 3.67 (v1.6.0, same test split and
-protocol) to 1.35.
+Per-codec CRF MAE: x264 0.52, x265 0.59, vp9 1.29, av1 1.37. The probe
+features cut the label-space VMAF MAE from 3.67 to 1.35.
 
 #### 80% prediction interval (q10–q90, label-space)
 

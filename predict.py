@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CRF -> VMAF predictor - inference example.
+"""CRF -> VMAF predictor - inference script.
 
 Computes content features for a video (whole file by default, or a chosen
 segment) at the target resolution - one ffmpeg pass, same filters as
@@ -21,14 +21,14 @@ Suppress with --no-interval.
 --preset applies a measured CRF offset (preset_offsets.json next to the
 model) when you encode with a non-baseline preset; training baselines:
 x264/x265 veryfast, vp9 cpu-used 6, av1 p10 (preset 12 at 2160p).
---calibration / --crf-offset take precedence — they already include the
+--calibration / --crf-offset take precedence - they already include the
 preset effect.
 
-Since v2.0 the model can also consume probe-encode features: before
+The model can also consume probe-encode features: before
 predicting, the script encodes two 2-second probe segments of your video
 at the target resolution (fixed CRF per codec, training-baseline preset),
 measures their VMAF + bitrate, and feeds the two points + slope to the
-model. The probe is recommended (vmaf_mae 3.67 -> 1.35 on the v4 test
+model. The probe is recommended (vmaf_mae 3.67 -> 1.35 on the test
 split) but optional - pass --no-probe to skip it; the probe features are
 then filled with neutral defaults (probe_vmaf = probe_vmaf2 = target VMAF,
 slope 0, training-median bitrate) and accuracy degrades back towards v1.x

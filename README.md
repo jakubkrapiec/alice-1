@@ -180,31 +180,62 @@ Predicted CRF is mapped back to VMAF via the segment's fitted curve and compared
 
 | Metric         | Value |
 | -------------- | -------------------- |
-| VMAF MAE       | 1.35                 |
-| CRF MAE        | 0.62                 |
-| within ±2 VMAF | 80.5%                |
+| VMAF MAE       | 1.47                 |
+| CRF MAE        | 0.53                 |
+| within ±2 VMAF | 78.0%                |
 
-Per-codec CRF MAE: x264 0.52, x265 0.59, vp9 1.29, av1 1.37. The probe
-features cut the label-space VMAF MAE from 3.67 to 1.35.
+Per-codec CRF MAE: x264 0.45, x265 0.53, vp9 1.07, av1 1.15. The probe
+features cut the label-space VMAF MAE from 3.67 to ~1.4 (v2.0 table: 1.35;
+v5 table below: 1.47 - the v5 label space is harder because the extended
+CRF ladders add labels in the high-CRF regime that v2.0 simply didn't
+cover).
+
+*Numbers from the v5 retraining (2026-08-18): same model architecture and
+features, training table extended with 1,330 extra multicodec ladder
+points at high CRF (x264/x265 up to 51, vp9/av1 up to 63), fixing the
+label-coverage gap at target VMAF 90-95. v2.0.0 label-space reference:
+VMAF MAE 1.35 / CRF MAE 0.62.*
 
 #### 80% prediction interval (q10–q90, label-space)
 
 | Metric                 | Value           |
 | ---------------------- | --------------- |
-| Coverage (nominal 80%) | 69.9%           |
+| Coverage (nominal 80%) | 69.8%           |
+
+### End-to-end (v5 model, real encodes on unseen sources)
+
+276 encodes: 8 unseen videos x 4 codecs x up to 4 resolutions x targets
+75/85/95, predicted CRF -> full encode -> measured VMAF.
+
+| Metric                    | All 276 labels | Excl. 14 unreachable* |
+| ------------------------- | -------------- | --------------------- |
+| VMAF MAE                  | 2.19           | **1.77**              |
+| bias                      | -0.23          | -0.78                 |
+| within ±1 / ±2 / ±5 VMAF  | 41% / 66% / 91%| - / - / 95%           |
+
+*Unreachable = target below the VMAF floor of the content at the codec's
+maximum allowed CRF (saturation; all 14 from one flat animated loop - the
+model correctly returns max CRF, the label is physically impossible).
+`predict.py` >= 2.0.1 reports this case explicitly via the saturation
+warning.
+
+Per target (all labels): VMAF 95 -> MAE 1.54, 97% within ±5 | VMAF 85 ->
+2.12 | VMAF 75 -> 2.91 (1.88 excl. unreachable). Per codec: x265 1.88,
+x264 2.10, vp9 2.15, av1 2.62. Per resolution: 720p 1.78, 1080p 1.91,
+1440p 2.39, 2160p 4.40 (1.61 excl. unreachable).
 
 ## Strengths
 
-- Well-calibrated at practically relevant targets: for target VMAF ≥ 85 the model is essentially unbiased (target 85: -0.25). High-target accuracy is the best regime (target 95: MAE 2.79, bias −0.91, 89% of encodes within ±5).
-- No systematic codec bias. All four codecs are within ±1.3 VMAF bias on real encodes.
+- Well-calibrated at practically relevant targets, and strongest exactly where it matters most: at target VMAF 95 the end-to-end MAE is 1.54 with 97% of encodes within ±5 (v5 E2E, 276 real encodes on unseen sources).
+- No systematic codec bias. All four codecs are within ±0.5 VMAF bias on real encodes (v5 E2E).
 - Cheap to run: one decode + one filter pass per segment, no GPU, and the model inference itself takes milliseconds.
 - Broad coverage: 4 codecs * 4 resolutions * VMAF 60–95, trained on ~18k diverse sources with real (not synthetic) CRF -> VMAF measurements.
 - Source-disjoint evaluation: both the test split and the end-to-end validation use videos the model never saw during training.
 
 ## Limitations & known failure modes
 
-- Low targets (≤80) are the weak regime. MAE 6.1 at target 75. Partly irreducible: for easy content even the maximum CRF yields VMAF ≈ 80+, so "VMAF 75" cannot be reached within the legal CRF range at all - the model correctly saturates at max CRF, but the error is still counted. If you need VMAF ≤ 75, expect best-effort behaviour rather than accuracy.
-- CGI, synthetic, and very smooth content produce the largest errors (worst end-to-end case: a CGI tunnel loop, mean |err| ≈ 10.8).
+- Low targets (≤80) remain the weak regime: end-to-end MAE 2.91 at target 75 (v5), but 1.88 once physically unreachable labels are excluded. A large share is irreducible: for easy content even the maximum CRF yields VMAF well above 75, so the target cannot be reached within the legal CRF range at all - the model correctly saturates at max CRF (reported by the v2.0.1 saturation warning), but the error is still counted. If you need VMAF ≤ 75, expect best-effort behaviour rather than accuracy.
+- CGI, synthetic, and very smooth content produce the largest errors (worst end-to-end case: a CGI tunnel loop, mean |err| ≈ 11, and also the source of all 14 unreachable labels in the v5 E2E set).
 - Content features are aggregated over the analyzed window (the whole file, by default), and the model has no visibility into scene changes within that window. For long, mixed-content videos, per-scene prediction (`--start`/`--duration` per shot) is more accurate than one whole-file prediction.
 - Predictions assume the exact encoder builds and presets listed above (see [Encoder settings](#encoder-settings-the-model-assumes)). Encoder upgrades, especially to SVT-AV1, can shift the CR -> VMAF mapping without warning - see [Retraining / drift](#retraining--drift).
 - VMAF itself is a noisy label (it's an SVM-based model with roughly ±0.5 noise floor), and 1440p/2160p labels use the 4K VMAF model, so scores aren't perfectly cross-resolution comparable.

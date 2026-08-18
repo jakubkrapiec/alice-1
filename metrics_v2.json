@@ -37,6 +37,22 @@
     "x264": 0.5214,
     "x265": 0.5928
    }
+  },
+  "v5_quantile": {
+   "note": "v5 retraining 2026-08-18: same architecture/features, table extended with 1330 extra multicodec ladder points at high CRF (x264/x265 to 51, vp9/av1 to 63) closing the target-90-95 label-coverage gap; 1,762,232 rows; probe coverage 0.988. Label space harder than v2.0 (new labels in the high-CRF regime), so vmaf_mae 1.35->1.47 is not a regression.",
+   "crf_mae": 0.5346,
+   "vmaf_mae": 1.4732,
+   "vmaf_bias": -0.0708,
+   "hit_pm1": 0.5706,
+   "hit_pm2": 0.7796,
+   "hit_pm5": 0.9527,
+   "coverage_q10_q90": 0.6984,
+   "crf_mae_by_codec": {
+    "av1": 1.1501,
+    "vp9": 1.0652,
+    "x264": 0.4494,
+    "x265": 0.5305
+   }
   }
  },
  "probe_gain_share_q50": 0.3659,
@@ -61,5 +77,75 @@
   "res_ratio": 0.0037,
   "target_height": 0.0028,
   "target_width": 0.0006
+ },
+ "e2e_v5": {
+  "note": "276 real encodes (8 unseen videos x 4 codecs x up to 4 resolutions x targets 75/85/95), predicted CRF -> full encode -> measured VMAF, 2026-08-18. adjusted = 14 physically unreachable labels excluded (target below content VMAF floor at codec max CRF; all one saturating animated loop at 1440/2160p; predict.py>=2.0.1 flags these via saturation_warning)",
+  "overall": {
+   "n": 276,
+   "mae": 2.187,
+   "bias": -0.233,
+   "hit_pm1": 0.4094,
+   "hit_pm2": 0.6594,
+   "hit_pm5": 0.9094
+  },
+  "overall_adjusted": {
+   "n": 262,
+   "mae": 1.77,
+   "bias": -0.78,
+   "hit_pm5": 0.947
+  },
+  "by_target": {
+   "75": {
+    "n": 92,
+    "mae": 2.906,
+    "bias": 0.942,
+    "mae_adjusted": 1.88,
+    "bias_adjusted": -0.32
+   },
+   "85": {
+    "n": 92,
+    "mae": 2.116,
+    "bias": -0.799
+   },
+   "95": {
+    "n": 92,
+    "mae": 1.54,
+    "bias": -0.842,
+    "hit_pm5": 0.9674
+   }
+  },
+  "by_codec": {
+   "av1": {
+    "mae": 2.622,
+    "bias": -0.228
+   },
+   "vp9": {
+    "mae": 2.147,
+    "bias": 0.082
+   },
+   "x264": {
+    "mae": 2.101,
+    "bias": -0.316
+   },
+   "x265": {
+    "mae": 1.88,
+    "bias": -0.471
+   }
+  },
+  "by_resolution": {
+   "720": {
+    "mae": 1.779
+   },
+   "1080": {
+    "mae": 1.914
+   },
+   "1440": {
+    "mae": 2.394
+   },
+   "2160": {
+    "mae": 4.397,
+    "mae_adjusted": 1.61
+   }
+  }
  }
 }

@@ -48,7 +48,8 @@ import lightgbm as lgb
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from predict import (RES_W, CRF_RANGE, probe, extract_features,  # noqa: E402
-                     build_feature_row, predict_crf)
+                     build_feature_row, predict_crf, model_needs_probe,
+                     PROBE_LOG_BR_MEDIAN)
 
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
 VMAF = os.environ.get("VMAF", "vmaf")
@@ -87,23 +88,19 @@ def encode_one(src, start, dur, w, h, encoder_args, crf, out_dir, tag, threads):
 
 def vmaf_score(dis, ref, w, h, out_dir, tag, threads):
     """VMAF via the vmaf CLI on rawvideo YUV — exactly as in training:
-    distorted decoded to yuv420p through a FIFO, mean over per-frame scores."""
+    distorted decoded to yuv420p, mean over per-frame scores."""
     log = out_dir / f"vmaf_{tag}.json"
     model = "version=vmaf_v0.6.1" if h <= 1080 else "version=vmaf_4k_v0.6.1"
-    fifo = out_dir / f"dis_{tag}.yuv"
-    os.mkfifo(fifo)
-    dec = subprocess.Popen(
-        [FFMPEG, "-y", "-v", "error", "-i", str(dis),
-         "-pix_fmt", "yuv420p", "-f", "rawvideo", str(fifo)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    dis_yuv = out_dir / f"dis_{tag}.yuv"
     try:
-        run([VMAF, "-r", str(ref), "-d", str(fifo),
+        run([FFMPEG, "-y", "-v", "error", "-i", str(dis),
+             "-pix_fmt", "yuv420p", "-f", "rawvideo", str(dis_yuv)])
+        run([VMAF, "-r", str(ref), "-d", str(dis_yuv),
              "-w", str(w), "-h", str(h), "-p", "420", "-b", "8",
              "-m", model, "--threads", str(threads),
              "--json", "-o", str(log)], timeout=1800)
     finally:
-        dec.communicate(timeout=120)
-        fifo.unlink(missing_ok=True)
+        dis_yuv.unlink(missing_ok=True)
     data = json.loads(log.read_text())
     frames = data.get("frames", [])
     if not frames:
@@ -143,6 +140,16 @@ def calibrate_video(video, args, width, model_path):
                                    start=start, duration=dur, threads=2)
     row = build_feature_row(feats, meta, args.codec, args.target_vmaf,
                             width, args.height)
+    if model_needs_probe(model):
+        # Neutral defaults, as predict.py --no-probe uses: this initial
+        # prediction only seeds the ladder center below - the ladder's
+        # measured (crf, vmaf) points determine the actual calibration.
+        row.update({
+            "probe_vmaf": args.target_vmaf,
+            "probe_vmaf2": args.target_vmaf,
+            "probe_slope": 0.0,
+            "probe_log_br": PROBE_LOG_BR_MEDIAN,
+        })
     _, pred_raw = predict_crf(model, row)
 
     lo, hi = CRF_RANGE[args.codec]

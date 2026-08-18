@@ -119,10 +119,10 @@ def _ff_path(p) -> str:
 
     Filter syntax uses ':' as option separator and '\\' as escape char, so a
     raw Windows path (C:\\Users\\..) breaks parsing or corrupts the filename.
-    Convert to forward slashes, then escape ':'.  POSIX paths pass through
+    Convert to forward slashes, then escape ':'. POSIX paths pass through
     unchanged.
     """
-    return str(p).replace("\\", "/").replace(":", "\\:")
+    return str(p).replace("\\", "/").replace(":", "\\\\:")
 
 
 # ---------------------------------------------------------------------------

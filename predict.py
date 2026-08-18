@@ -481,24 +481,6 @@ def main():
                                  threads=args.threads))
     crf, raw = predict_crf(model, row)
 
-    # saturation detection: raw prediction clipped at the ladder top means
-    # the model wanted MORE compression than allowed — for easy content the
-    # VMAF floor at max CRF can still sit above the target, making it
-    # unreachable. probe_vmaf (low-CRF probe ~99) corroborates this.
-    saturated = False
-    lo, hi = CRF_RANGE[args.codec]
-    if raw > hi:
-        saturated = True
-        extra = ""
-        if probe_feats and probe_feats.get("probe_vmaf", 0) >= 97:
-            extra = (f" (low-CRF probe VMAF is {probe_feats['probe_vmaf']:.1f} "
-                     "— this content barely degrades even at high quality)")
-        print(f"warning: target VMAF {args.target_vmaf:g} is likely "
-              f"unreachable for this video — raw prediction {raw:.1f} exceeds "
-              f"the {args.codec} ladder maximum CRF {hi}{extra}. "
-              f"Returning CRF {hi}; actual VMAF will be higher than the "
-              f"target.", file=sys.stderr)
-
     # v1.5.0: 80% prediction interval from sibling quantile models
     q10_raw = q90_raw = None
     if not args.no_interval:
@@ -570,6 +552,33 @@ def main():
         cal_note = {"crf_delta": args.crf_offset,
                     "crf_uncalibrated": int(round(min(max(raw, lo), hi)))}
 
+    # saturation detection (v2.0.1): computed on the FINAL effective raw
+    # prediction — after --preset / --calibration / --crf-offset deltas — so
+    # the warning reflects the CRF actually returned. An effective raw above
+    # the ladder top means even the most aggressive allowed CRF cannot
+    # degrade this content enough: the target VMAF is likely unreachable
+    # (easy/synthetic content whose VMAF floor at max CRF sits above the
+    # target). A real low-CRF probe_vmaf ~99 corroborates; the neutral
+    # --no-probe fallback (probe_vmaf == target_vmaf) is not evidence.
+    raw_eff = raw
+    if cal_note is not None:
+        raw_eff = raw + cal_note["crf_delta"]
+    elif preset_note is not None:
+        raw_eff = raw + preset_note["crf_delta"]
+    lo, hi = CRF_RANGE[args.codec]
+    saturated = raw_eff > hi
+    probe_ran = model_needs_probe(model) and not args.no_probe
+    if saturated:
+        extra = ""
+        if probe_ran and row.get("probe_vmaf", 0) >= 97:
+            extra = (f" (low-CRF probe VMAF is {row['probe_vmaf']:.1f} "
+                     "— this content barely degrades even at high quality)")
+        print(f"warning: target VMAF {args.target_vmaf:g} is likely "
+              f"unreachable for this video — effective raw prediction "
+              f"{raw_eff:.1f} exceeds the {args.codec} ladder maximum CRF "
+              f"{hi}{extra}. Returning CRF {hi}; actual VMAF will be higher "
+              f"than the target.", file=sys.stderr)
+
     interval = None
     if q10_raw is not None:
         lo, hi = CRF_RANGE[args.codec]
@@ -593,11 +602,11 @@ def main():
             out["calibration"] = cal_note
         if saturated:
             out["saturation_warning"] = {
-                "message": "target VMAF likely unreachable; raw prediction "
-                           "clipped at ladder maximum",
-                "crf_raw": round(raw, 3),
+                "message": "target VMAF likely unreachable; effective raw "
+                           "prediction clipped at ladder maximum",
+                "crf_raw_effective": round(raw_eff, 3),
                 "ladder_max_crf": hi,
-                "probe_vmaf": probe_feats.get("probe_vmaf") if probe_feats else None,
+                "probe_vmaf": row.get("probe_vmaf") if probe_ran else None,
             }
         print(json.dumps(out, indent=1))
     else:
@@ -619,9 +628,10 @@ def main():
             line += (f"\ncalibration: {cal_note['crf_delta']:+.2f} CRF "
                      f"(uncalibrated {cal_note['crf_uncalibrated']})")
         if saturated:
-            line += (f"\n⚠ saturation: raw {raw:.1f} clipped at ladder max "
-                     f"CRF {hi} — target VMAF likely unreachable for this "
-                     f"content, actual VMAF will overshoot")
+            line += (f"\n⚠ saturation: effective raw {raw_eff:.1f} clipped "
+                     f"at ladder max CRF {hi} — target VMAF likely "
+                     f"unreachable for this content, actual VMAF will "
+                     f"overshoot")
         print(line)
 
 

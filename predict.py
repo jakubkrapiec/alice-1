@@ -601,7 +601,7 @@ def main():
         if not args.no_conformal:
             cf = load_conformal(args.model)
             if cf:
-                conformal_corr = cf["codecs"].get(args.codec, {}).get(
+                conformal_corr = cf.get("codecs", {}).get(args.codec, {}).get(
                     "correction")
         interval = {"crf_q10": int(round(min(max(q10_raw, lo), hi))),
                     "crf_q90": int(round(min(max(q90_raw, lo), hi))),

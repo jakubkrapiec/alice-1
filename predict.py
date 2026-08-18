@@ -28,11 +28,11 @@ The model can also consume probe-encode features: before
 predicting, the script encodes two 2-second probe segments of your video
 at the target resolution (fixed CRF per codec, training-baseline preset),
 measures their VMAF + bitrate, and feeds the two points + slope to the
-model. The probe is recommended (vmaf_mae 3.67 -> 1.35 on the test
-split) but optional - pass --no-probe to skip it; the probe features are
-then filled with neutral defaults (probe_vmaf = probe_vmaf2 = target VMAF,
-slope 0, training-median bitrate) and accuracy degrades back towards v1.x
-levels. v1.x model files (no probe features) keep working unchanged.
+model. The probe is recommended but optional - pass --no-probe to skip it;
+the probe features are then filled with neutral defaults
+(probe_vmaf = probe_vmaf2 = target VMAF, slope 0, training-median bitrate)
+and accuracy degrades back towards v1.x levels. v1.x model files (no probe
+features) keep working unchanged.
 
 Requires: ffmpeg + ffprobe on PATH (the vmafmotion filter must be compiled
 in - it is in stock Ubuntu and ffmpeg.org builds); lightgbm, numpy, pandas.

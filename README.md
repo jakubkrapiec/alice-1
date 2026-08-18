@@ -228,7 +228,7 @@ features cut the label-space VMAF MAE from 3.67 to ~1.4.
 | `features.json` | Machine-readable feature spec: order, derived formulas, codec categories, CRF ranges. |
 | `training_videos.txt` | All 18,098 source videos used for training (one `source_key` per line). |
 | `metrics.json` | Full evaluation results (label-space test + end-to-end validation). |
-| `metrics_v2.json` | v2.0 evaluation results (label-space test, probe-feature metrics). |
+| `metrics.json` | Latest evaluation results (v5 label-space test, probe-feature metrics, E2E validation). |
 | `metadata.json` | Version, build date, checksums, library versions. |
 | `requirements.txt` | Python dependencies for `predict.py`. |
 | `LICENSE` | License of this package. |

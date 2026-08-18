@@ -134,5 +134,40 @@
    }
   }
  },
- "note": "metrics for the shipped v5 model (v2.1.0); historical v1.x-v2.0 experiment records removed - see git history or CHANGELOG.md"
+ "note": "metrics for the shipped v5 model (v2.1.0); historical v1.x-v2.0 experiment records removed - see git history or CHANGELOG.md",
+ "v2.2_conformal_band": {
+  "date": "2026-08-18",
+  "model": "unchanged (v5 / 2.1.0)",
+  "method": "split-conformal per codec on v5 validation split",
+  "nominal_coverage": 0.8,
+  "corrections_crf": {
+   "x264": 0.1189,
+   "x265": 0.2061,
+   "vp9": 0.5145,
+   "av1": 0.5608
+  },
+  "coverage": {
+   "raw_val": 0.6977,
+   "raw_test_macro": 0.6643,
+   "calibrated_test_macro": 0.8086,
+   "per_codec_test_after": {
+    "x264": 0.8032,
+    "x265": 0.7901,
+    "vp9": 0.7906,
+    "av1": 0.8504
+   },
+   "per_codec_test_before": {
+    "x264": 0.7112,
+    "x265": 0.6508,
+    "vp9": 0.6093,
+    "av1": 0.6861
+   },
+   "n_val": {
+    "x264": 151497,
+    "x265": 12264,
+    "vp9": 10427,
+    "av1": 8948
+   }
+  }
+ }
 }

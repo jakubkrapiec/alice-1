@@ -1,0 +1,12 @@
+{
+  "method": "split-conformal per codec",
+  "nominal_coverage": 0.8,
+  "trained_on": "training_table_v5 validation split",
+  "coverage_test_macro": 0.8086,
+  "codecs": {
+    "x264": {"correction": 0.1189, "n_val": 151497, "coverage_test_before": 0.7112, "coverage_test_after": 0.8032},
+    "x265": {"correction": 0.2061, "n_val": 12264,  "coverage_test_before": 0.6508, "coverage_test_after": 0.7901},
+    "vp9":  {"correction": 0.5145, "n_val": 10427,  "coverage_test_before": 0.6093, "coverage_test_after": 0.7906},
+    "av1":  {"correction": 0.5608, "n_val": 8948,   "coverage_test_before": 0.6861, "coverage_test_after": 0.8504}
+  }
+}

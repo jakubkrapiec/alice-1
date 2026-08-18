@@ -390,6 +390,16 @@ def load_preset_offsets(model_path: str):
     return json.loads(p.read_text()) if p.exists() else None
 
 
+def load_conformal(model_path: str):
+    """conformal_q10_q90.json next to the model file, or None when absent.
+
+    Split-conformal per-codec corrections widening the q10-q90 band to its
+    nominal 80% coverage: q10 -= correction, q90 += correction.
+    """
+    p = Path(model_path).parent / "conformal_q10_q90.json"
+    return json.loads(p.read_text()) if p.exists() else None
+
+
 def normalize_preset(codec: str, preset: str) -> str:
     """Accepts 'medium', 'slow', vp9 'cu4'/'4'/'cpu-used 4', av1 'p8'/'8'."""
     p = preset.strip().lower()
@@ -427,6 +437,11 @@ def main():
     ap.add_argument("--no-interval", action="store_true",
                     help="point prediction only, skip the q10-q90 interval "
                          "even when model_q10.txt/model_q90.txt are present")
+    ap.add_argument("--no-conformal", action="store_true",
+                    help="skip split-conformal widening of the q10-q90 band "
+                         "(conformal_q10_q90.json next to the model); the raw "
+                         "quantile band undercovers (~70%% actual vs 80%% "
+                         "nominal), the calibrated band restores coverage")
     ap.add_argument("--calibration", default=None,
                     help="calibration.json from calibrate.py - adds the "
                          "measured CRF offset for your encoder settings")
@@ -582,10 +597,22 @@ def main():
     interval = None
     if q10_raw is not None:
         lo, hi = CRF_RANGE[args.codec]
+        conformal_corr = None
+        if not args.no_conformal:
+            cf = load_conformal(args.model)
+            if cf:
+                conformal_corr = cf["codecs"].get(args.codec, {}).get(
+                    "correction")
         interval = {"crf_q10": int(round(min(max(q10_raw, lo), hi))),
                     "crf_q90": int(round(min(max(q90_raw, lo), hi))),
                     "crf_q10_raw": round(q10_raw, 3),
                     "crf_q90_raw": round(q90_raw, 3)}
+        if conformal_corr is not None:
+            interval["crf_q10_cal"] = int(round(min(
+                max(q10_raw - conformal_corr, lo), hi)))
+            interval["crf_q90_cal"] = int(round(min(
+                max(q90_raw + conformal_corr, lo), hi)))
+            interval["conformal_correction"] = round(conformal_corr, 4)
 
     if args.json:
         out = {"crf": crf, "crf_raw": round(raw, 3),
@@ -617,6 +644,10 @@ def main():
             line += (f"\n80% interval (q10-q90): CRF {interval['crf_q10']}.."
                      f"{interval['crf_q90']}  (raw {interval['crf_q10_raw']:.2f}"
                      f"..{interval['crf_q90_raw']:.2f})")
+            if "crf_q10_cal" in interval:
+                line += (f"\ncalibrated band (split-conformal, 80% "
+                         f"coverage): CRF {interval['crf_q10_cal']}.."
+                         f"{interval['crf_q90_cal']}")
         if preset_note:
             line += (f"\npreset: {preset_note['preset']} "
                      f"({preset_note['crf_delta']:+.2f} CRF vs baseline "

@@ -2,7 +2,7 @@
 
 A LightGBM model that predicts the CRF value needed to hit a target VMAF, given cheap content features of a video segment, a target resolution, and a codec. Covers x264, x265, VP9 and AV1 (SVT-AV1) at 720p, 1080p, 1440p and 2160p, for target VMAF 60–95.
 
-The shipped model (v2.0.0) is trained on 1.73M samples derived from 53.5k measured CRF -> VMAF curves across 18,098 unique source videos (CC0/CC-BY stock footage and standard test sequences). A v5 retraining on an extended 1.76M-row table exists (see Evaluation); its model artifacts are not yet shipped in this package.
+The shipped model (v2.1.0) is trained on 1.76M samples derived from ~54k measured CRF -> VMAF curves across 18,098 unique source videos (CC0/CC-BY stock footage and standard test sequences).
 
 ---
 
@@ -168,7 +168,7 @@ Precedence: `--calibration` / `--crf-offset` **replace** the preset offset - a c
   - *main:* 38,151 segments @720p, x264 only, jittered 6-point CRF ladder (anchors 18/43 + 4 random interior points per segment, deterministic per segment), giving dense real coverage of CRF 18–43.
   - *multicodec:* 3,891 (segment * resolution) rows, 4 codecs, fixed 5-point ladders: x264/x265 CRF {18,23,28,33/34,40}, vp9/av1 CRF {30,40,50,58,63}.
 - **Labels:** per (segment * codec * resolution), a decreasing logistic curve is fit to the 5–6 measured (CRF, VMAF) points (fallback: linear interpolation; 99.8% of fits logistic, mean fit RMSE ≈ 0.55 VMAF). The curve is inverted analytically for each integer target VMAF 60–95. Labels are emitted only when the inverted CRF lies inside the measured ladder - extrapolated labels are dropped. An earlier iteration extrapolated past the ladder for vp9/AV1 at CRF > 52, which biased those codecs by roughly +4 VMAF; the current pipeline avoids this.
-- **Table:** 1,731,985 rows (shipped v2.0.0 model; v4 table). The v5 retraining quoted in Evaluation extends this with 1,330 high-CRF multicodec ladder points to 1,762,232 rows - 1,444,289 x264 / 123,213 x265 / 106,515 vp9 / 88,215 av1.
+- **Table:** 1,762,232 rows - 1,444,289 x264 / 123,213 x265 / 106,515 vp9 / 88,215 av1; 1,449,889 @720p / 134,702 @1080p / 106,164 @1440p / 71,477 @2160p. v5 adds 1,330 multicodec ladder points at high CRF (x264/x265 extended to 51, vp9/av1 to 63) closing the target VMAF 90-95 label-coverage gap.
 - **Split:** by source video, never by row - train 80% / val 10% / test 10% (deterministic MD5 hash of `source_key`), so there's no content leakage between splits.
 - **Model selection:** 6-config hyperparameter sweep (best: 511 leaves, lr 0.03, feature_fraction 0.8, L2 1.0, early stopping). A two-stage residual-correction model (in the style used by some Bilibili encoding papers) was tried and rejected: it found no learnable structure in the stage-1 residuals and early-stopped after one iteration.
 

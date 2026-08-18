@@ -2,7 +2,7 @@
 
 A LightGBM model that predicts the CRF value needed to hit a target VMAF, given cheap content features of a video segment, a target resolution, and a codec. Covers x264, x265, VP9 and AV1 (SVT-AV1) at 720p, 1080p, 1440p and 2160p, for target VMAF 60–95.
 
-Trained on 1.73M samples derived from 53.5k measured CRF -> VMAF curves across 18,098 unique source videos (CC0/CC-BY stock footage and standard test sequences).
+Trained on 1.76M samples derived from ~54k measured CRF -> VMAF curves across 18,098 unique source videos (CC0/CC-BY stock footage and standard test sequences).
 
 ---
 
@@ -31,7 +31,7 @@ Per-title and per-scene encoding pipelines need to know, for a given chunk of co
 
 - **Input:** 20 features - content statistics (SI/TI/motion), fps, source and target resolution, codec, target VMAF, and 4 probe-encode features (`probe_vmaf`, `probe_vmaf2`, `probe_slope`, `probe_log_br`) measured from a 2 s probe encode at the target resolution (v2.0; recommended but optional - `predict.py --no-probe` fills neutral defaults at v1.x-level accuracy).
 - **Output:** predicted CRF (float; round and clamp to the codec's legal range before encoding), plus an 80% prediction interval (q10–q90) from the bundled quantile models.
-- **Model:** LightGBM GBDT quantile family (v2.0.0). Point prediction is the median (q50), 1,266 trees, 511 leaves, text format (`model.txt`, 59.6 MB). Interval bounds live in `model_q10.txt` / `model_q90.txt`. Built with LightGBM 4.7.
+- **Model:** LightGBM GBDT quantile family. Point prediction is the median (q50), 1,266 trees, 511 leaves, text format (`model.txt`, 59.6 MB). Interval bounds live in `model_q10.txt` / `model_q90.txt`. Built with LightGBM 4.7.
 
 Typical use case: a per-title ladder generator or a per-scene constrained-quality encoder controller.
 
@@ -168,43 +168,45 @@ Precedence: `--calibration` / `--crf-offset` **replace** the preset offset - a c
   - *main:* 38,151 segments @720p, x264 only, jittered 6-point CRF ladder (anchors 18/43 + 4 random interior points per segment, deterministic per segment), giving dense real coverage of CRF 18–43.
   - *multicodec:* 3,891 (segment * resolution) rows, 4 codecs, fixed 5-point ladders: x264/x265 CRF {18,23,28,33/34,40}, vp9/av1 CRF {30,40,50,58,63}.
 - **Labels:** per (segment * codec * resolution), a decreasing logistic curve is fit to the 5–6 measured (CRF, VMAF) points (fallback: linear interpolation; 99.8% of fits logistic, mean fit RMSE ≈ 0.55 VMAF). The curve is inverted analytically for each integer target VMAF 60–95. Labels are emitted only when the inverted CRF lies inside the measured ladder - extrapolated labels are dropped. An earlier iteration extrapolated past the ladder for vp9/AV1 at CRF > 52, which biased those codecs by roughly +4 VMAF; the current pipeline avoids this.
-- **Table:** 1,731,985 rows - 1,427,912 x264 / 109,343 x265 / 106,515 vp9 / 88,215 av1; 1,435,530 @720p / 134,702 @1080p / 97,005 @1440p / 64,748 @2160p.
+- **Table:** 1,762,232 rows - 1,444,289 x264 / 123,213 x265 / 106,515 vp9 / 88,215 av1; 1,449,889 @720p / 134,702 @1080p / 106,164 @1440p / 71,477 @2160p.
 - **Split:** by source video, never by row - train 80% / val 10% / test 10% (deterministic MD5 hash of `source_key`), so there's no content leakage between splits.
-- **Model selection:** 6-config hyperparameter sweep (best: 511 leaves, lr 0.03, feature_fraction 0.8, L2 1.0, early stopping - 154 rounds in v1.0, 137 in v1.1 after feature pruning). A two-stage residual-correction model (in the style used by some Bilibili encoding papers) was tried and rejected: it found no learnable structure in the stage-1 residuals and early-stopped after one iteration.
+- **Model selection:** 6-config hyperparameter sweep (best: 511 leaves, lr 0.03, feature_fraction 0.8, L2 1.0, early stopping). A two-stage residual-correction model (in the style used by some Bilibili encoding papers) was tried and rejected: it found no learnable structure in the stage-1 residuals and early-stopped after one iteration.
 
 ## Evaluation
 
-### Label-space (held-out test sources, 180,610 rows)
+### Label-space (held-out test sources, 182,940 rows)
 
 Predicted CRF is mapped back to VMAF via the segment's fitted curve and compared with the target. Test split: 10% of the 18,098 source videos, disjoint by source.
 
 | Metric         | Value |
 | -------------- | -------------------- |
-| VMAF MAE       | 1.35                 |
-| CRF MAE        | 0.62                 |
-| within ±2 VMAF | 80.5%                |
+| VMAF MAE       | 1.47                 |
+| CRF MAE        | 0.53                 |
+| within ±2 VMAF | 78.0%                |
 
-Per-codec CRF MAE: x264 0.52, x265 0.59, vp9 1.29, av1 1.37. The probe
-features cut the label-space VMAF MAE from 3.67 to 1.35.
+Per-codec CRF MAE: x264 0.45, x265 0.53, vp9 1.07, av1 1.15. The probe
+features cut the label-space VMAF MAE from 3.67 to ~1.4.
+
 
 #### 80% prediction interval (q10–q90, label-space)
 
 | Metric                 | Value           |
 | ---------------------- | --------------- |
-| Coverage (nominal 80%) | 69.9%           |
+| Coverage (nominal 80%) | 69.8%           |
+
 
 ## Strengths
 
-- Well-calibrated at practically relevant targets: for target VMAF ≥ 85 the model is essentially unbiased (target 85: -0.25). High-target accuracy is the best regime (target 95: MAE 2.79, bias −0.91, 89% of encodes within ±5).
-- No systematic codec bias. All four codecs are within ±1.3 VMAF bias on real encodes.
+- Well-calibrated at practically relevant targets: at target VMAF 95 the end-to-end MAE is 1.54 with 97% of encodes within ±5.
+- No systematic codec bias. All four codecs are within ±0.5 VMAF bias on real encodes.
 - Cheap to run: one decode + one filter pass per segment, no GPU, and the model inference itself takes milliseconds.
 - Broad coverage: 4 codecs * 4 resolutions * VMAF 60–95, trained on ~18k diverse sources with real (not synthetic) CRF -> VMAF measurements.
 - Source-disjoint evaluation: both the test split and the end-to-end validation use videos the model never saw during training.
 
 ## Limitations & known failure modes
 
-- Low targets (≤80) are the weak regime. MAE 6.1 at target 75. Partly irreducible: for easy content even the maximum CRF yields VMAF ≈ 80+, so "VMAF 75" cannot be reached within the legal CRF range at all - the model correctly saturates at max CRF, but the error is still counted. If you need VMAF ≤ 75, expect best-effort behaviour rather than accuracy.
-- CGI, synthetic, and very smooth content produce the largest errors (worst end-to-end case: a CGI tunnel loop, mean |err| ≈ 10.8).
+- Low targets (≤80) are the weak regime: end-to-end MAE 2.91 at target 75, but 1.88 once physically unreachable labels are excluded. A large share is irreducible: for easy content even the maximum CRF yields VMAF well above 75, so the target cannot be reached within the legal CRF range at all - the model correctly saturates at max CRF (reported by the saturation warning), but the error is still counted. If you need VMAF ≤ 75, expect best-effort behaviour rather than accuracy.
+- CGI, synthetic, and very smooth content produce the largest errors (worst end-to-end case: a CGI tunnel loop, mean |err| ≈ 11).
 - Content features are aggregated over the analyzed window (the whole file, by default), and the model has no visibility into scene changes within that window. For long, mixed-content videos, per-scene prediction (`--start`/`--duration` per shot) is more accurate than one whole-file prediction.
 - Predictions assume the exact encoder builds and presets listed above (see [Encoder settings](#encoder-settings-the-model-assumes)). Encoder upgrades, especially to SVT-AV1, can shift the CR -> VMAF mapping without warning - see [Retraining / drift](#retraining--drift).
 - VMAF itself is a noisy label (it's an SVM-based model with roughly ±0.5 noise floor), and 1440p/2160p labels use the 4K VMAF model, so scores aren't perfectly cross-resolution comparable.
@@ -226,7 +228,7 @@ features cut the label-space VMAF MAE from 3.67 to 1.35.
 | `features.json` | Machine-readable feature spec: order, derived formulas, codec categories, CRF ranges. |
 | `training_videos.txt` | All 18,098 source videos used for training (one `source_key` per line). |
 | `metrics.json` | Full evaluation results (label-space test + end-to-end validation). |
-| `metrics_v2.json` | v2.0 evaluation results (label-space test, probe-feature metrics). |
+| `metrics.json` | Latest evaluation results (label-space test, probe-feature metrics, E2E validation). |
 | `metadata.json` | Version, build date, checksums, library versions. |
 | `requirements.txt` | Python dependencies for `predict.py`. |
 | `LICENSE` | License of this package. |

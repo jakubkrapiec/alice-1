@@ -1,415 +1,138 @@
 {
- "model": "model.txt (v1.5.0: quantile median q50, 377 trees; internal lineage: model_t3_q50 - same table v4, split, seed and hyperparams as the v1.1.0 L2 model, only the objective changed; v1.1.0-v1.4.0 shipped model_s1_v4_B_pruned L2)",
- "feature_pruning_v1.1": {
-  "note": "variants retrained on identical data/params/seed; label-space test metrics; reference v3 (21 feats): VMAF MAE 3.604, hit_pm2 0.422",
-  "A_no_duration_20_feats": {
-   "vmaf_mae": 3.6335,
-   "hit_pm2": 0.419,
-   "best_iter": 143
-  },
-  "B_pruned_16_feats_SHIPPED": {
-   "dropped": [
-    "segment_duration",
-    "log_si",
-    "log_ti",
-    "log_motion",
-    "pixels"
-   ],
-   "vmaf_mae": 3.6524,
-   "hit_pm2": 0.4153,
-   "best_iter": 137
-  },
-  "C_aggressive_14_feats": {
-   "dropped": [
-    "segment_duration",
-    "log_si",
-    "log_ti",
-    "log_motion",
-    "pixels",
-    "res_ratio",
-    "motion_x_ti"
-   ],
-   "vmaf_mae": 3.6392,
-   "hit_pm2": 0.4168,
-   "best_iter": 143
-  },
-  "conclusion": "all variants within noise; shipped B (principled removals only)"
+ "features": [
+  "si_mean",
+  "si_std",
+  "ti_mean",
+  "ti_std",
+  "vmafmotion",
+  "fps",
+  "target_height",
+  "source_height",
+  "target_width",
+  "codec",
+  "target_vmaf",
+  "si_x_ti",
+  "motion_x_ti",
+  "si_cv",
+  "ti_cv",
+  "res_ratio",
+  "probe_vmaf",
+  "probe_vmaf2",
+  "probe_slope",
+  "probe_log_br"
+ ],
+ "probe_mandatory": true,
+ "probe_join": "per_segment",
+ "probe_coverage": 0.9879595876138897,
+ "experiments": {
+  "v5_quantile": {
+   "crf_mae": 0.5346,
+   "vmaf_mae": 1.4732,
+   "vmaf_bias": -0.0708,
+   "hit_pm1": 0.5706,
+   "hit_pm2": 0.7796,
+   "hit_pm5": 0.9527,
+   "coverage_q10_q90": 0.6984,
+   "crf_mae_by_codec": {
+    "av1": 1.1501,
+    "vp9": 1.0652,
+    "x264": 0.4494,
+    "x265": 0.5305
+   }
+  }
  },
- "label_space_test": {
-  "note": "held-out source videos (10% of 18,098), 180,610 rows; predicted CRF mapped to VMAF via per-segment fitted curve, compared with target",
-  "vmaf_mae": 3.604,
-  "hit_pm1": 0.251,
-  "hit_pm2": 0.422,
-  "hit_pm5": 0.751
+ "probe_gain_share_q50": 0.3661,
+ "feature_importance_q50": {
+  "target_vmaf": 0.3623,
+  "probe_vmaf2": 0.1927,
+  "probe_vmaf": 0.0929,
+  "probe_slope": 0.0531,
+  "codec": 0.0457,
+  "probe_log_br": 0.0275,
+  "si_mean": 0.0251,
+  "si_cv": 0.0251,
+  "si_std": 0.025,
+  "ti_cv": 0.0242,
+  "vmafmotion": 0.024,
+  "ti_std": 0.0235,
+  "ti_mean": 0.0211,
+  "si_x_ti": 0.0177,
+  "motion_x_ti": 0.0139,
+  "fps": 0.0121,
+  "source_height": 0.0068,
+  "res_ratio": 0.0036,
+  "target_height": 0.0031,
+  "target_width": 0.0006
  },
- "end_to_end_validation": {
-  "note": "predict CRF -> real encode -> real VMAF measurement; 8 unseen videos (validation_videos.txt), 28 video x resolution units x 4 codecs x targets {75,85,95} = 336 encodes, 0 failures",
-  "date": "2026-08-10",
+ "e2e_v5": {
+  "note": "276 real encodes (8 unseen videos x 4 codecs x up to 4 resolutions x targets 75/85/95), predicted CRF -> full encode -> measured VMAF, 2026-08-18. adjusted = 14 physically unreachable labels excluded (target below content VMAF floor at codec max CRF; all one saturating animated loop at 1440/2160p; predict.py>=2.0.1 flags these via saturation_warning)",
   "overall": {
-   "n": 336,
-   "vmaf_mae": 5.07,
-   "bias": 0.44,
-   "hit_pm1": 0.173,
-   "hit_pm2": 0.307,
-   "hit_pm5": 0.595
+   "n": 276,
+   "mae": 2.187,
+   "bias": -0.233,
+   "hit_pm1": 0.4094,
+   "hit_pm2": 0.6594,
+   "hit_pm5": 0.9094
+  },
+  "overall_adjusted": {
+   "n": 262,
+   "mae": 1.77,
+   "bias": -0.78,
+   "hit_pm5": 0.947
   },
   "by_target": {
    "75": {
-    "vmaf_mae": 7.08,
-    "bias": 2.69,
-    "hit_pm2": 0.15,
-    "hit_pm5": 0.42
+    "n": 92,
+    "mae": 2.906,
+    "bias": 0.942,
+    "mae_adjusted": 1.88,
+    "bias_adjusted": -0.32
    },
    "85": {
-    "vmaf_mae": 5.14,
-    "bias": 0.03,
-    "hit_pm2": 0.31,
-    "hit_pm5": 0.55
+    "n": 92,
+    "mae": 2.116,
+    "bias": -0.799
    },
    "95": {
-    "vmaf_mae": 2.98,
-    "bias": -1.39,
-    "hit_pm2": 0.46,
-    "hit_pm5": 0.81
+    "n": 92,
+    "mae": 1.54,
+    "bias": -0.842,
+    "hit_pm5": 0.9674
    }
   },
-  "by_codec_bias": {
-   "x264": -0.64,
-   "x265": 0.98,
-   "vp9": 1.38,
-   "av1": 0.04
-  },
-  "by_resolution_bias": {
-   "720": 0.17,
-   "1080": -0.8,
-   "1440": 1.25,
-   "2160": 1.65
-  },
-  "caveats": [
-   "8-video sample; numbers are indicative",
-   "low targets (<=80) are the weak regime and partly physically unreachable for easy content within the legal CRF range",
-   "worst case content: CGI/synthetic (mean |err| ~11 on a CGI tunnel loop)"
-  ]
- },
- "previous_iteration_comparison": {
-  "note": "v2 had a label-generation bug (CRF inversion clamped to [10,52], silently dropping vp9/AV1 labels requiring CRF 52-63); v3 fixed it. Same 8 videos, same targets:",
-  "v2_e2e": {
-   "vmaf_mae": 5.4,
-   "bias": 2.17,
-   "av1_bias": 4.29,
-   "vp9_bias": 3.89
-  },
-  "v3_e2e": {
-   "vmaf_mae": 5.07,
-   "bias": 0.44,
-   "av1_bias": 0.04,
-   "vp9_bias": 1.38
-  }
- },
- "v1.3_rejected_v4_retrain": {
-  "verdict": "REJECTED - shipped model remains the v1.1 model. The v4 retrain (identical 16 features, hyperparameters, seed and split; v4 table = v3 rows reproduced 1:1 + 14,359 hardcontent label rows) showed no improvement: deltas within noise, slightly negative on every non-hc slice. The 410 hardcontent segments (0.8% of rows) could not move the model.",
-  "note": "Head-to-head on the identical held-out test split (180,642 rows; md5(source_key)%100). new_v4 = rejected retrain, old_prod = shipped model.",
-  "table": {
-   "rows": 1746344,
-   "curves": 53988,
-   "logistic_fits": 53875,
-   "logistic_rmse_mean": 0.5498,
-   "logistic_rmse_p95": 1.4752,
-   "by_dataset": {
-    "main": 1300505,
-    "multicodec": 431480,
-    "hardcontent": 14359
-   }
-  },
-  "best_iter": 133,
-  "test_overall": {
-   "new_v4": {
-    "crf_mae": 1.7215,
-    "vmaf_mae": 3.6719,
-    "vmaf_bias": 0.1978,
-    "hit_pm1": 0.2451,
-    "hit_pm2": 0.4142,
-    "hit_pm5": 0.7421
-   },
-   "old_prod": {
-    "crf_mae": 1.7118,
-    "vmaf_mae": 3.6527,
-    "vmaf_bias": 0.1943,
-    "hit_pm1": 0.2467,
-    "hit_pm2": 0.4152,
-    "hit_pm5": 0.7449
-   }
-  },
-  "test_by_dataset": {
-   "main": {
-    "n": 131729,
-    "new_v4": {
-     "crf_mae": 1.3435,
-     "vmaf_mae": 3.4311,
-     "vmaf_bias": 0.012,
-     "hit_pm1": 0.2589,
-     "hit_pm2": 0.4376,
-     "hit_pm5": 0.7685
-    },
-    "old_prod": {
-     "crf_mae": 1.3411,
-     "vmaf_mae": 3.4206,
-     "vmaf_bias": 0.0332,
-     "hit_pm1": 0.2603,
-     "hit_pm2": 0.4374,
-     "hit_pm5": 0.7697
-    }
-   },
-   "mc": {
-    "n": 48881,
-    "new_v4": {
-     "crf_mae": 2.7404,
-     "vmaf_mae": 4.321,
-     "vmaf_bias": 0.6977,
-     "hit_pm1": 0.2064,
-     "hit_pm2": 0.3508,
-     "hit_pm5": 0.6695
-    },
-    "old_prod": {
-     "crf_mae": 2.7108,
-     "vmaf_mae": 4.278,
-     "vmaf_bias": 0.6319,
-     "hit_pm1": 0.2087,
-     "hit_pm2": 0.3542,
-     "hit_pm5": 0.6774
-    }
-   },
-   "hc": {
-    "n": 32,
-    "new_v4": {
-     "crf_mae": 1.6429,
-     "vmaf_mae": 5.1369,
-     "vmaf_bias": -5.1369,
-     "hit_pm1": 0.0625,
-     "hit_pm2": 0.0938,
-     "hit_pm5": 0.5
-    },
-    "old_prod": {
-     "crf_mae": 1.6831,
-     "vmaf_mae": 5.2238,
-     "vmaf_bias": -5.2238,
-     "hit_pm1": 0.0625,
-     "hit_pm2": 0.0938,
-     "hit_pm5": 0.5
-    }
-   }
-  },
-  "test_by_codec": {
+  "by_codec": {
    "av1": {
-    "n": 9972,
-    "new_v4": {
-     "crf_mae": 4.7129,
-     "vmaf_mae": 5.6875,
-     "vmaf_bias": 1.9123,
-     "hit_pm1": 0.1527,
-     "hit_pm2": 0.2551,
-     "hit_pm5": 0.549
-    },
-    "old_prod": {
-     "crf_mae": 4.6305,
-     "vmaf_mae": 5.5546,
-     "vmaf_bias": 1.7598,
-     "hit_pm1": 0.1573,
-     "hit_pm2": 0.2685,
-     "hit_pm5": 0.5622
-    }
+    "mae": 2.622,
+    "bias": -0.228
    },
    "vp9": {
-    "n": 12084,
-    "new_v4": {
-     "crf_mae": 3.3893,
-     "vmaf_mae": 4.1864,
-     "vmaf_bias": 0.8808,
-     "hit_pm1": 0.1907,
-     "hit_pm2": 0.3411,
-     "hit_pm5": 0.6841
-    },
-    "old_prod": {
-     "crf_mae": 3.3639,
-     "vmaf_mae": 4.1607,
-     "vmaf_bias": 0.7696,
-     "hit_pm1": 0.1969,
-     "hit_pm2": 0.3438,
-     "hit_pm5": 0.6903
-    }
+    "mae": 2.147,
+    "bias": 0.082
    },
    "x264": {
-    "n": 146260,
-    "new_v4": {
-     "crf_mae": 1.3437,
-     "vmaf_mae": 3.4312,
-     "vmaf_bias": -0.0494,
-     "hit_pm1": 0.2608,
-     "hit_pm2": 0.4388,
-     "hit_pm5": 0.7668
-    },
-    "old_prod": {
-     "crf_mae": 1.3412,
-     "vmaf_mae": 3.4223,
-     "vmaf_bias": -0.0257,
-     "hit_pm1": 0.2621,
-     "hit_pm2": 0.4386,
-     "hit_pm5": 0.7681
-    }
+    "mae": 2.101,
+    "bias": -0.316
    },
    "x265": {
-    "n": 12326,
-    "new_v4": {
-     "crf_mae": 2.1501,
-     "vmaf_mae": 4.3939,
-     "vmaf_bias": 1.0748,
-     "hit_pm1": 0.1875,
-     "hit_pm2": 0.3238,
-     "hit_pm5": 0.6609
-    },
-    "old_prod": {
-     "crf_mae": 2.1284,
-     "vmaf_mae": 4.349,
-     "vmaf_bias": 0.9743,
-     "hit_pm1": 0.184,
-     "hit_pm2": 0.3257,
-     "hit_pm5": 0.6707
-    }
+    "mae": 1.88,
+    "bias": -0.471
    }
   },
-  "known_gap": "both models land ~5 VMAF below target on hardcontent (vmaf_bias -5.1) - to be addressed by a dedicated hardcontent measurement dataset (in progress)."
- },
- "preset_delta_v1.0_dataset": {
-  "note": "Track 2 preset-delta measurement dataset; collected 2026-08-10..2026-08-12 on GCP n2d-highcpu-16; NOT used in training the shipped model",
-  "used_in_training": false,
-  "rows": 5471,
-  "dropped_vmaf_neg": 4,
-  "sources": 27,
-  "excluded_units": "val_coral_b (ref decode failed, all 4 resolutions, 300 cells)",
-  "codecs": {
-   "x264": 1456,
-   "x265": 1460,
-   "vp9": 1095,
-   "av1": 1460
-  },
-  "resolutions": {
-   "1280x720": 2025,
-   "1920x1080": 1796,
-   "2560x1440": 825,
-   "3840x2160": 825
-  },
-  "vmaf": {
-   "min": 12.9921,
-   "p50": 89.3949,
-   "max": 99.9976
-  },
-  "vmaf_models": {
-   "<=1080p": "vmaf_v0.6.1",
-   ">=1440p": "vmaf_4k_v0.6.1"
-  },
-  "md5": "10bf5004804910d8f6f5df488493e166",
-  "s3": "s3://kubakra-videos/ml-crf-vmaf/training_data/preset_delta_v1.0/"
- },
- "v1.5_quantile_switch": {
-  "note": "Track 3 (train_track3.py): quantile models on the identical v4 table/split/seed/config as the production L2 model",
-  "label_space_test": {
-   "note": "same held-out test split as label_space_test above; predicted CRF mapped to VMAF via per-segment fitted curve",
-   "baseline_l2_prod": {
-    "crf_mae": 1.7118,
-    "vmaf_mae": 3.6527,
-    "vmaf_bias": 0.1943,
-    "hit_pm2": 0.4152
+  "by_resolution": {
+   "720": {
+    "mae": 1.779
    },
-   "q50_pointwise_SHIPPED": {
-    "crf_mae": 1.6625,
-    "vmaf_mae": 3.5184,
-    "vmaf_bias": 0.1411,
-    "hit_pm2": 0.4338
+   "1080": {
+    "mae": 1.914
    },
-   "q50_by_codec_vmaf_mae": {
-    "av1": 5.1826,
-    "vp9": 4.0268,
-    "x264": 3.3068,
-    "x265": 4.1853
+   "1440": {
+    "mae": 2.394
    },
-   "baseline_by_codec_vmaf_mae": {
-    "av1": 5.5546,
-    "vp9": 4.1607,
-    "x264": 3.4223,
-    "x265": 4.349
-   }
-  },
-  "interval_q10_q90": {
-   "coverage": 0.7425,
-   "coverage_by_codec": {
-    "av1": 0.5538,
-    "vp9": 0.5916,
-    "x264": 0.7751,
-    "x265": 0.6569
-   },
-   "width_mean_crf": 4.8957,
-   "width_median_crf": 4.192,
-   "crossing_rate": 0.0,
-   "note": "nominal 80%; narrow on low-data codecs - treat as approximate on av1/vp9"
-  },
-  "end_to_end_validation_v1.5": {
-   "note": "8 unseen videos (same sources/grid as previous E2E), head-to-head prod L2 vs q50: 4 codecs x 3 targets (75/85/95) x resolutions <= source; 672 rows, 52 failed (symmetric: 26 per model, ENOSPC window)",
-   "paired": {
-    "n": 307,
-    "prod_mae": 5.119,
-    "q50_mae": 4.569,
-    "q50_wins": 133,
-    "prod_wins": 70,
-    "ties": 104,
-    "mean_delta_q50_minus_prod": -0.5503
-   },
-   "overall": {
-    "prod": {
-     "n": 311,
-     "mae": 5.154,
-     "bias": 0.735
-    },
-    "q50": {
-     "n": 309,
-     "mae": 4.593,
-     "bias": 0.146
-    }
-   },
-   "interval_e2e": {
-    "width_mean_crf": 7.775,
-    "q50_within_q10_q90": 0.9126
-   },
-   "script": "validate_e2e_t3.py; data: s3://kubakra-videos/ml-crf-vmaf/ (validation_e2e_t3 rows/summary)"
-  },
-  "rejected": {
-   "E2_monotone_constraint_target_vmaf": {
-    "vmaf_mae": 3.6778,
-    "note": "+0.7% MAE cost vs 3.6527; removes 1.44% monotonicity violations; rejected (cost without user-visible benefit)"
-   },
-   "E3_per_codec_models": {
-    "aggregate_vmaf_mae": 3.5749,
-    "note": "x264 better (-3.0%) but av1 5.72 vs 5.55 and x265 4.39 vs 4.35 worse (lost transfer learning); rejected"
+   "2160": {
+    "mae": 4.397,
+    "mae_adjusted": 1.61
    }
   }
  },
- "v1.6_preset_offsets": {
-  "note": "predict.py --preset + preset_offsets.json: measured CRF offsets for non-baseline encoder presets, derived from preset_delta v1.0 (Track 2). delta = CRF(preset) - CRF(baseline) at equal VMAF via inverse interpolation of per-clip CRF ladders; median over VMAF targets 75-95 and clips. 44 cells (codec x preset x resolution). Model unchanged. av1 baseline corrected to p10 at 1440p (p12 only at 2160p, matching the training pipeline); the v1.6.0 draft had p12 at >=1440p, which shifted the av1@1440p cells.",
-  "file": "preset_offsets.json (v1.0.0, md5 c7fe57882131c674540452ac5bbbb825)",
-  "delta_stability": "delta roughly constant across VMAF targets 75-95 (+/-0.5 within a cell) -> single median per cell; per-target modeling not warranted",
-  "direction_sanity": "slower presets -> positive delta (x264 slow +3.2..+3.6, x265 slow +3.1..+3.6, av1 p6 +3.4..+5.4); av1 p12 vs p10 baseline negative (-2.1..-3.4; p12 is faster than p10); monotone within codec preset order",
-  "loo_validation": {
-   "method": "leave-one-clip-out on per-clip median delta",
-   "residual_mae": 0.725,
-   "residual_median": 0.442,
-   "naive_delta0_mae": 2.247,
-   "by_codec_residual_mae": {
-    "vp9": 0.29,
-    "x265": 0.42,
-    "x264": 0.76,
-    "av1": 1.26
-   },
-   "weakest_cell": "av1|p6|2160 (residual 1.92, n=11 clips, IQR 3.26) - per-cell IQR reported in predict.py output"
-  },
-  "data": "s3://kubakra-videos/ml-crf-vmaf/training_data/preset_delta_v1.0/"
- }
+ "note": "metrics for the shipped v5 model (v2.1.0); historical v1.x-v2.0 experiment records removed - see git history or CHANGELOG.md"
 }

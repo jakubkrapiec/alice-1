@@ -1,3 +1,28 @@
+---
+license: cc0-1.0
+library_name: lightgbm
+tags:
+  - video-encoding
+  - vmaf
+  - crf
+  - lightgbm
+  - x264
+  - x265
+  - vp9
+  - av1
+  - per-title-encoding
+  - video-quality
+datasets:
+  - jakubkrapiec/crf-vmaf-training-data
+metrics:
+  - name: VMAF MAE
+    type: vmaf_mae
+    value: 1.47
+  - name: CRF MAE
+    type: crf_mae
+    value: 0.53
+---
+
 # Alice-1: a CRF -> VMAF prediction model
 
 A LightGBM model that predicts the CRF value needed to hit a target VMAF, given cheap content features of a video segment, a target resolution, and a codec. Covers x264, x265, VP9 and AV1 (SVT-AV1) at 720p, 1080p, 1440p and 2160p, for target VMAF 60–95.

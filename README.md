@@ -1,5 +1,5 @@
 ---
-license: cc0-1.0
+license: mit
 library_name: lightgbm
 tags:
   - video-encoding

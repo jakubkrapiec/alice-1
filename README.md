@@ -193,11 +193,9 @@ features cut the label-space VMAF MAE from 3.67 to ~1.4.
 
 | Metric                 | Value           |
 | ---------------------- | --------------- |
-| Coverage (nominal 80%) | 69.8% raw → **80.9% calibrated** |
+| Coverage (nominal 80%) | 69.8% raw, 80.9% calibrated |
 
-The raw quantile band undercovers (~70% actual vs 80% nominal).
-`conformal_q10_q90.json` ships **split-conformal per-codec corrections**
-(widen q10/q90 by a per-codec constant fit on the v5 validation split);
+`conformal_q10_q90.json` ships split-conformal per-codec corrections,
 `predict.py` applies them by default and prints the calibrated band as
 `crf_q10_cal`/`crf_q90_cal` in `--json` output. `--no-conformal` restores
 the raw band. Per-codec test coverage after calibration: x264 80.3%,

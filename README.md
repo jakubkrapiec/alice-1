@@ -46,7 +46,8 @@ pip install -r requirements.txt
 python predict.py input.mp4 --codec av1 --target-height 2160 --target-vmaf 90
 # -> "predicted CRF: 41  (raw 40.8)"
 #    "80% interval (q10-q90): CRF 36..47  (raw 35.60..47.12)"
-# (point prediction only: --no-interval)
+#    "calibrated band (split-conformal, 80% coverage): CRF 36..48"
+# (point prediction only: --no-interval; raw uncalibrated band: --no-conformal)
 ```
 
 Minimal programmatic use:
@@ -192,7 +193,13 @@ features cut the label-space VMAF MAE from 3.67 to ~1.4.
 
 | Metric                 | Value           |
 | ---------------------- | --------------- |
-| Coverage (nominal 80%) | 69.8%           |
+| Coverage (nominal 80%) | 69.8% raw, 80.9% calibrated |
+
+`conformal_q10_q90.json` ships split-conformal per-codec corrections,
+`predict.py` applies them by default and prints the calibrated band as
+`crf_q10_cal`/`crf_q90_cal` in `--json` output. `--no-conformal` restores
+the raw band. Per-codec test coverage after calibration: x264 80.3%,
+x265 79.0%, vp9 79.1%, av1 85.0%.
 
 
 ## Strengths
@@ -225,6 +232,7 @@ features cut the label-space VMAF MAE from 3.67 to ~1.4.
 | `predict.py` | Self-contained inference example: feature extraction (ffmpeg) + prediction, CLI included. |
 | `calibrate.py` | Probe-based calibration for custom encoder presets/builds; writes `calibration.json` consumed by `predict.py --calibration`. |
 | `preset_offsets.json` | Measured CRF offsets per codec * preset * resolution (from the Track 2 preset-delta dataset); consumed by `predict.py --preset`. |
+| `conformal_q10_q90.json` | Split-conformal per-codec corrections widening the q10-q90 band to nominal 80% coverage; applied by `predict.py` by default (`--no-conformal` to skip). |
 | `features.json` | Machine-readable feature spec: order, derived formulas, codec categories, CRF ranges. |
 | `training_videos.txt` | All 18,098 source videos used for training (one `source_key` per line). |
 | `metrics.json` | Full evaluation results (label-space test + end-to-end validation). |

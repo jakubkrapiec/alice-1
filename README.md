@@ -231,23 +231,24 @@ x265 79.0%, vp9 79.1%, av1 85.0%.
 
 ### Runtime: probe vs `--no-probe` (predict.py wall time)
 
-Measured on a synthetic 1080p30 clip (ffmpeg `testsrc2`, **20 s long**),
-Hetzner-class x86_64 host, 3 runs per cell, mean wall time, target VMAF 90:
+Measured on a synthetic 1080p30 clip (ffmpeg `testsrc2`), analyzing a
+**10 s segment** (`--start 0 --duration 10`), Hetzner-class x86_64 host,
+3 runs per cell, mean wall time, target VMAF 90:
 
 | Codec | with probe | `--no-probe` | probe overhead |
 | ----- | ---------- | ------------ | -------------- |
-| x264  | 51.3 s     | 43.8 s       | +7.5 s (+17%)  |
-| x265  | 55.3 s     | 44.1 s       | +11.2 s (+25%) |
-| vp9   | 58.8 s     | 43.8 s       | +15.0 s (+34%) |
-| av1   | 53.1 s     | 43.9 s       | +9.2 s (+21%)  |
+| x264  | 30.6 s     | 22.7 s       | +7.9 s (+35%)  |
+| x265  | 34.1 s     | 22.9 s       | +11.2 s (+49%) |
+| vp9   | 37.5 s     | 22.9 s       | +14.7 s (+64%) |
+| av1   | 32.4 s     | 22.8 s       | +9.7 s (+42%)  |
 
-The ~44 s baseline is feature extraction (SI/TI/motion over the whole 20 s
-clip) and is identical in both modes; the probe itself (two 2 s encodes +
-VMAF) adds only ~8-15 s depending on codec. In return you get the v2.x
-accuracy (VMAF MAE ~1.4 vs ~3.7 without probe features) and a much tighter
-prediction interval (on the same file: CRF 28 with band 26-28 vs CRF 31
-with band 30-36, x264 @ target VMAF 90). Absolute times scale with input
-length and hardware; the probe overhead is roughly constant.
+The ~23 s baseline is feature extraction (SI/TI/motion over the analyzed
+segment) and is identical in both modes; the probe itself (two 2 s encodes
++ VMAF) adds a roughly constant ~8-15 s depending on codec. In return you
+get the v2.x accuracy (VMAF MAE ~1.4 vs ~3.7 without probe features) and a
+much tighter prediction interval (on the same segment: CRF 28 with band
+26-28 vs CRF 31 with band 30-36, x264 @ target VMAF 90). Absolute times
+scale with segment length and hardware.
 
 
 ## Strengths

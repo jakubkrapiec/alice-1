@@ -232,19 +232,20 @@ x265 79.0%, vp9 79.1%, av1 85.0%.
 ### Runtime: probe vs `--no-probe` (predict.py wall time)
 
 Measured on a synthetic 1080p30 clip (ffmpeg `testsrc2`), analyzing a
-**10 s segment** (`--start 0 --duration 10`), Hetzner-class x86_64 host,
-3 runs per cell, mean wall time, target VMAF 90:
+**10 s segment** (`--start 0 --duration 10`), Google Cloud `n2d-highcpu-16`
+(AMD EPYC 7B13, europe-north1), 3 runs per cell, mean wall time, target
+VMAF 90:
 
 | Codec | with probe | `--no-probe` | probe overhead |
 | ----- | ---------- | ------------ | -------------- |
-| x264  | 30.6 s     | 22.7 s       | +7.9 s (+35%)  |
-| x265  | 34.1 s     | 22.9 s       | +11.2 s (+49%) |
-| vp9   | 37.5 s     | 22.9 s       | +14.7 s (+64%) |
-| av1   | 32.4 s     | 22.8 s       | +9.7 s (+42%)  |
+| x264  | 17.9 s     | 13.9 s       | +4.0 s (+29%)  |
+| x265  | 18.3 s     | 14.0 s       | +4.3 s (+31%)  |
+| vp9   | 23.2 s     | 13.9 s       | +9.3 s (+67%)  |
+| av1   | 19.2 s     | 13.9 s       | +5.3 s (+38%)  |
 
-The ~23 s baseline is feature extraction (SI/TI/motion over the
+The ~14 s baseline is feature extraction (SI/TI/motion over the
 analyzed segment) and is identical in both modes; the probe itself (two
-2 s encodes plus VMAF) adds a roughly constant ~8-15 s depending on
+2 s encodes plus VMAF) adds a roughly constant ~4-9 s depending on
 codec. In return you get the v2.x accuracy (VMAF MAE ~1.4 vs ~3.7 without
 probe features) and a much tighter prediction interval (on the same
 segment: CRF 28 with band 26-28 vs CRF 31 with band 30-36, x264 @ target

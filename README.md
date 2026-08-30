@@ -229,6 +229,21 @@ the raw band. Per-codec test coverage after calibration: x264 80.3%,
 x265 79.0%, vp9 79.1%, av1 85.0%.
 
 
+### Runtime: probe vs `--no-probe` (predict.py wall time)
+
+Measured on a synthetic 1080p30 clip (ffmpeg `testsrc2`), analyzing a
+**10 s segment** (`--start 0 --duration 10`), Google Cloud `n2d-highcpu-16`
+(AMD EPYC 7B13, europe-north1), 3 runs per cell, mean wall time, target
+VMAF 90:
+
+| Codec | with probe | `--no-probe` | probe overhead |
+| ----- | ---------- | ------------ | -------------- |
+| x264  | 17.9 s     | 13.9 s       | +4.0 s (+29%)  |
+| x265  | 18.3 s     | 14.0 s       | +4.3 s (+31%)  |
+| vp9   | 23.2 s     | 13.9 s       | +9.3 s (+67%)  |
+| av1   | 19.2 s     | 13.9 s       | +5.3 s (+38%)  |
+
+
 ## Strengths
 
 - Well-calibrated at practically relevant targets: at target VMAF 95 the end-to-end MAE is 1.54 with 97% of encodes within ±5.

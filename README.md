@@ -229,6 +229,27 @@ the raw band. Per-codec test coverage after calibration: x264 80.3%,
 x265 79.0%, vp9 79.1%, av1 85.0%.
 
 
+### Runtime: probe vs `--no-probe` (predict.py wall time)
+
+Measured on a synthetic 1080p30 clip (ffmpeg `testsrc2`, **20 s long**),
+Hetzner-class x86_64 host, 3 runs per cell, mean wall time, target VMAF 90:
+
+| Codec | with probe | `--no-probe` | probe overhead |
+| ----- | ---------- | ------------ | -------------- |
+| x264  | 51.3 s     | 43.8 s       | +7.5 s (+17%)  |
+| x265  | 55.3 s     | 44.1 s       | +11.2 s (+25%) |
+| vp9   | 58.8 s     | 43.8 s       | +15.0 s (+34%) |
+| av1   | 53.1 s     | 43.9 s       | +9.2 s (+21%)  |
+
+The ~44 s baseline is feature extraction (SI/TI/motion over the whole 20 s
+clip) and is identical in both modes; the probe itself (two 2 s encodes +
+VMAF) adds only ~8-15 s depending on codec. In return you get the v2.x
+accuracy (VMAF MAE ~1.4 vs ~3.7 without probe features) and a much tighter
+prediction interval (on the same file: CRF 28 with band 26-28 vs CRF 31
+with band 30-36, x264 @ target VMAF 90). Absolute times scale with input
+length and hardware; the probe overhead is roughly constant.
+
+
 ## Strengths
 
 - Well-calibrated at practically relevant targets: at target VMAF 95 the end-to-end MAE is 1.54 with 97% of encodes within ±5.

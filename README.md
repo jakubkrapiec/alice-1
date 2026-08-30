@@ -242,13 +242,13 @@ Measured on a synthetic 1080p30 clip (ffmpeg `testsrc2`), analyzing a
 | vp9   | 37.5 s     | 22.9 s       | +14.7 s (+64%) |
 | av1   | 32.4 s     | 22.8 s       | +9.7 s (+42%)  |
 
-The ~23 s baseline is feature extraction (SI/TI/motion over the analyzed
-segment) and is identical in both modes; the probe itself (two 2 s encodes
-+ VMAF) adds a roughly constant ~8-15 s depending on codec. In return you
-get the v2.x accuracy (VMAF MAE ~1.4 vs ~3.7 without probe features) and a
-much tighter prediction interval (on the same segment: CRF 28 with band
-26-28 vs CRF 31 with band 30-36, x264 @ target VMAF 90). Absolute times
-scale with segment length and hardware.
+The ~23 s baseline is feature extraction (SI/TI/motion over the
+analyzed segment) and is identical in both modes; the probe itself (two
+2 s encodes plus VMAF) adds a roughly constant ~8-15 s depending on
+codec. In return you get the v2.x accuracy (VMAF MAE ~1.4 vs ~3.7 without
+probe features) and a much tighter prediction interval (on the same
+segment: CRF 28 with band 26-28 vs CRF 31 with band 30-36, x264 @ target
+VMAF 90). Absolute times scale with segment length and hardware.
 
 
 ## Strengths

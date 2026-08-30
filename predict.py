@@ -24,18 +24,16 @@ x264/x265 veryfast, vp9 cpu-used 6, av1 p10 (preset 12 at 2160p).
 --calibration / --crf-offset take precedence - they already include the
 preset effect.
 
-The model can also consume probe-encode features: before
+The model also consumes probe-encode features: before
 predicting, the script encodes two 2-second probe segments of your video
 at the target resolution (fixed CRF per codec, training-baseline preset),
 measures their VMAF + bitrate, and feeds the two points + slope to the
-model. The probe is mandatory for v2.x models (they have probe_* features)
-and requires the vmaf CLI; v1.x model files (no probe features) keep
-working unchanged and never probe.
+model.
 
 Requires: ffmpeg + ffprobe on PATH (the vmafmotion filter must be compiled
 in - it is in stock Ubuntu and ffmpeg.org builds); lightgbm, numpy, pandas.
 Binary names can be overridden with the FFMPEG / FFPROBE env vars.
-calibrate.py additionally needs the vmaf CLI; so does the v2.0 probe
+calibrate.py additionally needs the vmaf CLI; so does the probe
 (VMAF env var to override).
 """
 import argparse
@@ -328,8 +326,7 @@ def run_probe(video: str, codec: str, width: int, height: int,
     """Two probe encodes -> ({probe_vmaf, probe_vmaf2, probe_slope,
     probe_log_br}, cache_hit).
 
-    Mandatory for v2.x models (they have probe_* features). Uses PROBE_SEC
-    seconds from `start` (same analysis start as feature extraction).
+    Uses PROBE_SEC seconds from `start` (same analysis start as feature extraction).
     The two encodes run in parallel (each gets threads//2 ffmpeg threads).
     Results are cached persistently, keyed by content hash + codec +
     resolution + start, so repeat predictions on the same file are free.

@@ -54,7 +54,7 @@ Trained on 1.76M samples derived from ~54k measured CRF -> VMAF curves across 18
 
 Per-title and per-scene encoding pipelines need to know, for a given chunk of content, resolution and codec, which CRF produces a given VMAF. Solving this by brute force (even by using binary search) means encoding each segment at several CRFs and measuring VMAF, which is expensive. This model answers it in milliseconds from lightweight content features that cost one decode plus one filter pass to compute, with no encoding required.
 
-- **Input:** 20 features - content statistics (SI/TI/motion), fps, source and target resolution, codec, target VMAF, and 4 probe-encode features (`probe_vmaf`, `probe_vmaf2`, `probe_slope`, `probe_log_br`) measured from a 2 s probe encode at the target resolution (mandatory for v2.x models; v1.x model files have no probe features and never probe).
+- **Input:** 20 features - content statistics (SI/TI/motion), fps, source and target resolution, codec, target VMAF, and 4 probe-encode features (`probe_vmaf`, `probe_vmaf2`, `probe_slope`, `probe_log_br`) measured from a 2 s probe encode at the target resolution.
 - **Output:** predicted CRF (float; round and clamp to the codec's legal range before encoding), plus an 80% prediction interval (q10–q90) from the bundled quantile models.
 - **Model:** LightGBM GBDT quantile family. Point prediction is the median (q50), 1,266 trees, 511 leaves, text format (`model.txt`, 59.6 MB). Interval bounds live in `model_q10.txt` / `model_q90.txt`. Built with LightGBM 4.7.
 
@@ -62,7 +62,7 @@ Typical use case: a per-title ladder generator or a per-scene constrained-qualit
 
 ## Quick start
 
-Requirements: Python 3.10+, `lightgbm`, `numpy`, `pandas`, and an `ffmpeg` binary with `libvmaf` (`vmafmotion` filter) on `$PATH`. Models v2.x (with `probe_*` features, e.g. the bundled `model.txt`) additionally need the `vmaf` CLI on `$PATH` for the probe encode; v1.x model files never probe and don't need it.
+Requirements: Python 3.10+, `lightgbm`, `numpy`, `pandas`, an `ffmpeg` binary with `libvmaf` (`vmafmotion` filter) on `$PATH`, the `vmaf` CLI on `$PATH` for the probe encode.
 
 ```bash
 pip install -r requirements.txt
@@ -135,8 +135,7 @@ All content features are computed on the target-resolution segment, after bicubi
 
 `predict.py` computes all of these for you. The probe features come from
 `run_probe()` (two 2 s encodes + VMAF measurements, a few seconds of extra
-work). The probe is mandatory for v2.x models and requires the `vmaf` CLI.
-Model files without `probe_*` features (v1.x) never trigger the probe.
+work).
 
 ## Video length
 
@@ -249,24 +248,16 @@ x265 79.0%, vp9 79.1%, av1 85.0%.
 Measured on a synthetic 1080p30 clip (ffmpeg `testsrc2`, **10 s** long),
 analyzing the whole file, Google Cloud `n2d-highcpu-16` (AMD EPYC 7B13,
 europe-north1), 3 runs per cell, mean wall time, target VMAF 90,
-`--threads 16` (v2.3.0, probe encodes run in parallel):
+`--threads 16`:
 
-| Codec | probe (cold cache) | probe (cache hit) | feature extraction only |
-| ----- | ------------------ | ----------------- | ----------------------- |
-| x264  | 13.2 s             | 12.5 s            | 12.4 s                  |
-| x265  | 13.3 s             | 12.4 s            | 12.5 s                  |
-| vp9   | 14.1 s             | 12.4 s            | 12.5 s                  |
-| av1   | 13.5 s             | 12.5 s            | 12.5 s                  |
+| Codec | Cold cache | Cache hit |
+| ----- | ---------- | --------- |
+| x264  | 13.2 s     | 12.5 s    |
+| x265  | 13.3 s     | 12.4 s    |
+| vp9   | 14.1 s     | 12.4 s    |
+| av1   | 13.5 s     | 12.5 s    |
 
-("Feature extraction only" measured with the probe code path disabled;
-the probe itself adds 0.8–1.6 s wall time.)
-
-With the persistent probe cache (default) a repeated prediction on the same
-file skips the probe entirely and matches the feature-extraction-only time.
-For comparison, v2.2.0 (sequential probe encodes, same machine and clip)
-took 15.0 s (x264) / 20.8 s (vp9) with the probe - the parallel probe is
-~12% / ~32% faster before caching kicks in. Batch mode amortizes feature
-extraction too: 4 codecs in one invocation took 12.6 s (warm probe cache)
+Batch mode amortizes feature extraction: 4 codecs in one invocation took 12.6 s (warm probe cache)
 vs ~50 s for four separate runs.
 
 

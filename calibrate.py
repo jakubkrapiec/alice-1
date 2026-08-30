@@ -255,7 +255,7 @@ def main():
 
     deltas = [r["delta"] for r in results if "delta" in r]
     if not deltas:
-        sys.exit("error: no usable probes — nothing to calibrate")
+        sys.exit("error: no usable probes - nothing to calibrate")
     deltas = np.array(deltas)
     entry = {
         "codec": args.codec,

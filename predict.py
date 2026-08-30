@@ -28,11 +28,9 @@ The model can also consume probe-encode features: before
 predicting, the script encodes two 2-second probe segments of your video
 at the target resolution (fixed CRF per codec, training-baseline preset),
 measures their VMAF + bitrate, and feeds the two points + slope to the
-model. The probe is recommended but optional - pass --no-probe to skip it;
-the probe features are then filled with neutral defaults
-(probe_vmaf = probe_vmaf2 = target VMAF, slope 0, training-median bitrate)
-and accuracy degrades back towards v1.x levels. v1.x model files (no probe
-features) keep working unchanged.
+model. The probe is mandatory for v2.x models (they have probe_* features)
+and requires the vmaf CLI; v1.x model files (no probe features) keep
+working unchanged and never probe.
 
 Requires: ffmpeg + ffprobe on PATH (the vmafmotion filter must be compiled
 in - it is in stock Ubuntu and ffmpeg.org builds); lightgbm, numpy, pandas.
@@ -77,10 +75,6 @@ FEATURES = BASE_FEATS + DERIVED   # 16 features, exact training order
 # v2.0: probe-encode features appended at the end (exact training order:
 # 16 base+derived, then probe_vmaf, probe_vmaf2, probe_slope, probe_log_br)
 PROBE_KEYS = ["probe_vmaf", "probe_vmaf2", "probe_slope", "probe_log_br"]
-
-# Training-set median of probe_log_br (52,316 rows, probe_data.jsonl) -
-# used as the neutral fallback for --no-probe.
-PROBE_LOG_BR_MEDIAN = 6.80
 
 PROBE_CACHE_DEFAULT = (Path(os.environ.get("XDG_CACHE_HOME",
                                            Path.home() / ".cache"))
@@ -334,7 +328,7 @@ def run_probe(video: str, codec: str, width: int, height: int,
     """Two probe encodes -> ({probe_vmaf, probe_vmaf2, probe_slope,
     probe_log_br}, cache_hit).
 
-    Recommended for v2.x models (skip with --no-probe). Uses PROBE_SEC
+    Mandatory for v2.x models (they have probe_* features). Uses PROBE_SEC
     seconds from `start` (same analysis start as feature extraction).
     The two encodes run in parallel (each gets threads//2 ffmpeg threads).
     Results are cached persistently, keyed by content hash + codec +
@@ -494,7 +488,7 @@ def baseline_preset(offsets: dict, codec: str, target_height: int) -> str:
 
 
 def _predict_one(video, feats, meta, model, im_models, codec, width,
-                 height, target_vmaf, args, no_probe, probe_feats):
+                 height, target_vmaf, args, probe_feats):
     """Single (codec, target_vmaf) prediction. Returns the result dict
     (JSON-serializable) plus a formatted text line."""
     row = build_feature_row(feats, meta, codec, target_vmaf, width, height)
@@ -569,7 +563,7 @@ def _predict_one(video, feats, meta, model, im_models, codec, width,
         raw_eff = raw + preset_note["crf_delta"]
     lo, hi = CRF_RANGE[codec]
     saturated = raw_eff > hi
-    probe_ran = model_needs_probe(model) and not no_probe
+    probe_ran = model_needs_probe(model)
     if saturated:
         extra = ""
         if probe_ran and row.get("probe_vmaf", 0) >= 97:
@@ -650,7 +644,8 @@ def _predict_one(video, feats, meta, model, im_models, codec, width,
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Predict CRF for a target VMAF.")
+    ap = argparse.ArgumentParser(description="Predict CRF for a target VMAF.",
+                                 allow_abbrev=False)
     ap.add_argument("video")
     ap.add_argument("--codec", default=None, choices=sorted(CRF_RANGE))
     ap.add_argument("--target-height", type=int, required=True,
@@ -668,11 +663,6 @@ def main():
                     help="optional: analyze only this many seconds")
     ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--model", default="model.txt")
-    ap.add_argument("--no-probe", action="store_true",
-                    help="v2.x models: skip the probe encode and fill the "
-                         "probe_* features with neutral defaults - faster, "
-                         "no vmaf CLI needed, but accuracy degrades towards "
-                         "v1.x levels (vmaf_mae ~3.7 instead of ~1.35)")
     ap.add_argument("--probe-cache", default=None, metavar="PATH",
                     help="probe cache JSON file (default: "
                          "~/.cache/crf-vmaf-predictor/probe_cache.json)")
@@ -742,42 +732,27 @@ def main():
     if not args.no_interval:
         im_models = load_interval_models(args.model)
 
-    # probe per codec (cached across jobs with the same codec)
+    # probe per codec (mandatory for v2.x models, cached across jobs)
     probe_by_codec = {}
     if model_needs_probe(model):
         for codec in sorted({c for c, _ in norm_jobs}):
-            if args.no_probe:
-                probe_by_codec[codec] = {
-                    "probe_vmaf": 0.0, "probe_vmaf2": 0.0,
-                    "probe_slope": 0.0,
-                    "probe_log_br": PROBE_LOG_BR_MEDIAN,
-                }
-            else:
-                pf, hit = run_probe(args.video, codec, width,
-                                    args.target_height,
-                                    start=args.start or 0.0,
-                                    threads=args.threads,
-                                    cache=not args.no_probe_cache,
-                                    cache_path=args.probe_cache)
-                probe_by_codec[codec] = pf
-                if hit and not args.json:
-                    print(f"note: probe cache hit for {codec}",
-                          file=sys.stderr)
-        if args.no_probe:
-            print("warning: --no-probe - probe features filled with neutral "
-                  "defaults; expect v1.x-level accuracy (vmaf_mae ~3.7 "
-                  "instead of ~1.35)", file=sys.stderr)
-            for codec in probe_by_codec:
-                probe_by_codec[codec]["probe_vmaf"] = None  # patched per job
+            pf, hit = run_probe(args.video, codec, width,
+                                args.target_height,
+                                start=args.start or 0.0,
+                                threads=args.threads,
+                                cache=not args.no_probe_cache,
+                                cache_path=args.probe_cache)
+            probe_by_codec[codec] = pf
+            if hit and not args.json:
+                print(f"note: probe cache hit for {codec}",
+                      file=sys.stderr)
 
     results, lines = [], []
     for codec, tv in norm_jobs:
         pf = dict(probe_by_codec.get(codec, {}))
-        if args.no_probe and model_needs_probe(model):
-            pf["probe_vmaf"] = pf["probe_vmaf2"] = tv
         out, line = _predict_one(args.video, feats, meta, model, im_models,
                                  codec, width, args.target_height, tv,
-                                 args, args.no_probe, pf)
+                                 args, pf)
         results.append(out)
         lines.append(line)
 

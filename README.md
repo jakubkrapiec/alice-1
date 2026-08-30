@@ -54,7 +54,7 @@ Trained on 1.76M samples derived from ~54k measured CRF -> VMAF curves across 18
 
 Per-title and per-scene encoding pipelines need to know, for a given chunk of content, resolution and codec, which CRF produces a given VMAF. Solving this by brute force (even by using binary search) means encoding each segment at several CRFs and measuring VMAF, which is expensive. This model answers it in milliseconds from lightweight content features that cost one decode plus one filter pass to compute, with no encoding required.
 
-- **Input:** 20 features - content statistics (SI/TI/motion), fps, source and target resolution, codec, target VMAF, and 4 probe-encode features (`probe_vmaf`, `probe_vmaf2`, `probe_slope`, `probe_log_br`) measured from a mandatory 2 s probe encode at the target resolution (v2.0).
+- **Input:** 20 features - content statistics (SI/TI/motion), fps, source and target resolution, codec, target VMAF, and 4 probe-encode features (`probe_vmaf`, `probe_vmaf2`, `probe_slope`, `probe_log_br`) measured from a 2 s probe encode at the target resolution (mandatory for v2.x models; v1.x model files have no probe features and never probe).
 - **Output:** predicted CRF (float; round and clamp to the codec's legal range before encoding), plus an 80% prediction interval (q10–q90) from the bundled quantile models.
 - **Model:** LightGBM GBDT quantile family. Point prediction is the median (q50), 1,266 trees, 511 leaves, text format (`model.txt`, 59.6 MB). Interval bounds live in `model_q10.txt` / `model_q90.txt`. Built with LightGBM 4.7.
 
@@ -62,7 +62,7 @@ Typical use case: a per-title ladder generator or a per-scene constrained-qualit
 
 ## Quick start
 
-Requirements: Python 3.10+, `lightgbm`, `numpy`, `pandas`, and an `ffmpeg` binary with `libvmaf` (`vmafmotion` filter) on `$PATH`. The v2.0 probe encode additionally needs the `vmaf` CLI on `$PATH`.
+Requirements: Python 3.10+, `lightgbm`, `numpy`, `pandas`, and an `ffmpeg` binary with `libvmaf` (`vmafmotion` filter) on `$PATH`. Models v2.x (with `probe_*` features, e.g. the bundled `model.txt`) additionally need the `vmaf` CLI on `$PATH` for the probe encode; v1.x model files never probe and don't need it.
 
 ```bash
 pip install -r requirements.txt

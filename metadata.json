@@ -1,6 +1,6 @@
 {
   "name": "alice-1",
-  "version": "2.1.0",
+  "version": "3.0.0",
   "created": "2026-08-15",
   "changelog": {
     "1.0.1": "predict.py: whole-file analysis by default, segment_duration fed as constant 10.0, warning for windows < 3 s; model unchanged",
@@ -105,7 +105,7 @@
     }
   },
   "probe": {
-    "mandatory": false,
+    "mandatory": true,
     "seconds": 2.0,
     "crfs": {
       "x264": [

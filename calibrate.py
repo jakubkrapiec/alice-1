@@ -48,8 +48,12 @@ import lightgbm as lgb
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from predict import (RES_W, CRF_RANGE, probe, extract_features,  # noqa: E402
-                     build_feature_row, predict_crf, model_needs_probe,
-                     PROBE_LOG_BR_MEDIAN)
+                     build_feature_row, predict_crf, model_needs_probe)
+
+# Training-set median of probe_log_br (52,316 rows, probe_data.jsonl) -
+# neutral probe default used to seed the initial ladder-center prediction
+# (the ladder's measured points determine the actual calibration).
+PROBE_LOG_BR_MEDIAN = 6.80
 
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
 VMAF = os.environ.get("VMAF", "vmaf")
@@ -141,9 +145,9 @@ def calibrate_video(video, args, width, model_path):
     row = build_feature_row(feats, meta, args.codec, args.target_vmaf,
                             width, args.height)
     if model_needs_probe(model):
-        # Neutral defaults, as predict.py --no-probe uses: this initial
-        # prediction only seeds the ladder center below - the ladder's
-        # measured (crf, vmaf) points determine the actual calibration.
+        # Neutral defaults: this initial prediction only seeds the ladder
+        # center below - the ladder's measured (crf, vmaf) points determine
+        # the actual calibration.
         row.update({
             "probe_vmaf": args.target_vmaf,
             "probe_vmaf2": args.target_vmaf,

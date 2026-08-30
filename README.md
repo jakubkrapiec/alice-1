@@ -54,7 +54,7 @@ Trained on 1.76M samples derived from ~54k measured CRF -> VMAF curves across 18
 
 Per-title and per-scene encoding pipelines need to know, for a given chunk of content, resolution and codec, which CRF produces a given VMAF. Solving this by brute force (even by using binary search) means encoding each segment at several CRFs and measuring VMAF, which is expensive. This model answers it in milliseconds from lightweight content features that cost one decode plus one filter pass to compute, with no encoding required.
 
-- **Input:** 20 features - content statistics (SI/TI/motion), fps, source and target resolution, codec, target VMAF, and 4 probe-encode features (`probe_vmaf`, `probe_vmaf2`, `probe_slope`, `probe_log_br`) measured from a 2 s probe encode at the target resolution (v2.0; recommended but optional - `predict.py --no-probe` fills neutral defaults at v1.x-level accuracy).
+- **Input:** 20 features - content statistics (SI/TI/motion), fps, source and target resolution, codec, target VMAF, and 4 probe-encode features (`probe_vmaf`, `probe_vmaf2`, `probe_slope`, `probe_log_br`) measured from a 2 s probe encode at the target resolution.
 - **Output:** predicted CRF (float; round and clamp to the codec's legal range before encoding), plus an 80% prediction interval (q10–q90) from the bundled quantile models.
 - **Model:** LightGBM GBDT quantile family. Point prediction is the median (q50), 1,266 trees, 511 leaves, text format (`model.txt`, 59.6 MB). Interval bounds live in `model_q10.txt` / `model_q90.txt`. Built with LightGBM 4.7.
 
@@ -62,7 +62,7 @@ Typical use case: a per-title ladder generator or a per-scene constrained-qualit
 
 ## Quick start
 
-Requirements: Python 3.10+, `lightgbm`, `numpy`, `pandas`, and an `ffmpeg` binary with `libvmaf` (`vmafmotion` filter) on `$PATH`. The v2.0 probe encode additionally needs the `vmaf` CLI on `$PATH` (or pass `--no-probe` to skip the probe).
+Requirements: Python 3.10+, `lightgbm`, `numpy`, `pandas`, an `ffmpeg` binary with `libvmaf` (`vmafmotion` filter) on `$PATH`, the `vmaf` CLI on `$PATH` for the probe encode.
 
 ```bash
 pip install -r requirements.txt
@@ -73,7 +73,24 @@ python predict.py input.mp4 --codec av1 --target-height 2160 --target-vmaf 90
 #    "80% interval (q10-q90): CRF 36..47  (raw 35.60..47.12)"
 #    "calibrated band (split-conformal, 80% coverage): CRF 36..48"
 # (point prediction only: --no-interval; raw uncalibrated band: --no-conformal)
+
+# Machine-readable output:
+python predict.py input.mp4 --codec x265 --target-height 1080 --target-vmaf 90 --json
+
+# Batch: several (codec, target) jobs on the same file - features and
+# probe encodes are computed once and reused (probe cached on disk):
+cat jobs.json
+# [{"codec": "x264", "target_vmaf": 90},
+#  {"codec": "x265", "target_vmaf": 88},
+#  {"codec": "av1",  "target_vmaf": 88}]
+python predict.py input.mp4 --target-height 1080 --batch jobs.json --json
 ```
+
+The two probe encodes run in parallel, and probe results are cached in
+`~/.cache/crf-vmaf-predictor/probe_cache.json` (keyed by a content hash of
+the file + codec + resolution + analysis start offset), so repeated
+predictions on the same video skip the probe entirely. Override with
+`--probe-cache PATH` or disable with `--no-probe-cache`.
 
 Minimal programmatic use:
 
@@ -118,10 +135,7 @@ All content features are computed on the target-resolution segment, after bicubi
 
 `predict.py` computes all of these for you. The probe features come from
 `run_probe()` (two 2 s encodes + VMAF measurements, a few seconds of extra
-work); with `--no-probe` they are filled with neutral defaults
-(`probe_vmaf` = `probe_vmaf2` = target VMAF, slope 0, training-median
-bitrate) and accuracy degrades to v1.x levels. Model files without `probe_*`
-features (v1.x) never trigger the probe.
+work).
 
 ## Video length
 
@@ -229,19 +243,22 @@ the raw band. Per-codec test coverage after calibration: x264 80.3%,
 x265 79.0%, vp9 79.1%, av1 85.0%.
 
 
-### Runtime: probe vs `--no-probe` (predict.py wall time)
+### Runtime (predict.py wall time)
 
-Measured on a synthetic 1080p30 clip (ffmpeg `testsrc2`), analyzing a
-**10 s segment** (`--start 0 --duration 10`), Google Cloud `n2d-highcpu-16`
-(AMD EPYC 7B13, europe-north1), 3 runs per cell, mean wall time, target
-VMAF 90:
+Measured on a synthetic 1080p30 clip (ffmpeg `testsrc2`, **10 s** long),
+analyzing the whole file, Google Cloud `n2d-highcpu-16` (AMD EPYC 7B13,
+europe-north1), 3 runs per cell, mean wall time, target VMAF 90,
+`--threads 16`:
 
-| Codec | with probe | `--no-probe` | probe overhead |
-| ----- | ---------- | ------------ | -------------- |
-| x264  | 17.9 s     | 13.9 s       | +4.0 s (+29%)  |
-| x265  | 18.3 s     | 14.0 s       | +4.3 s (+31%)  |
-| vp9   | 23.2 s     | 13.9 s       | +9.3 s (+67%)  |
-| av1   | 19.2 s     | 13.9 s       | +5.3 s (+38%)  |
+| Codec | Cold cache | Cache hit |
+| ----- | ---------- | --------- |
+| x264  | 13.2 s     | 12.5 s    |
+| x265  | 13.3 s     | 12.4 s    |
+| vp9   | 14.1 s     | 12.4 s    |
+| av1   | 13.5 s     | 12.5 s    |
+
+Batch mode amortizes feature extraction: 4 codecs in one invocation took 12.6 s (warm probe cache)
+vs ~50 s for four separate runs.
 
 
 ## Strengths

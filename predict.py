@@ -24,28 +24,26 @@ x264/x265 veryfast, vp9 cpu-used 6, av1 p10 (preset 12 at 2160p).
 --calibration / --crf-offset take precedence - they already include the
 preset effect.
 
-The model can also consume probe-encode features: before
+The model also consumes probe-encode features: before
 predicting, the script encodes two 2-second probe segments of your video
 at the target resolution (fixed CRF per codec, training-baseline preset),
 measures their VMAF + bitrate, and feeds the two points + slope to the
-model. The probe is recommended but optional - pass --no-probe to skip it;
-the probe features are then filled with neutral defaults
-(probe_vmaf = probe_vmaf2 = target VMAF, slope 0, training-median bitrate)
-and accuracy degrades back towards v1.x levels. v1.x model files (no probe
-features) keep working unchanged.
+model.
 
 Requires: ffmpeg + ffprobe on PATH (the vmafmotion filter must be compiled
 in - it is in stock Ubuntu and ffmpeg.org builds); lightgbm, numpy, pandas.
 Binary names can be overridden with the FFMPEG / FFPROBE env vars.
-calibrate.py additionally needs the vmaf CLI; so does the v2.0 probe
+calibrate.py additionally needs the vmaf CLI; so does the probe
 (VMAF env var to override).
 """
 import argparse
+import hashlib
 import json
 import os
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from fractions import Fraction
 from pathlib import Path
 
@@ -76,9 +74,50 @@ FEATURES = BASE_FEATS + DERIVED   # 16 features, exact training order
 # 16 base+derived, then probe_vmaf, probe_vmaf2, probe_slope, probe_log_br)
 PROBE_KEYS = ["probe_vmaf", "probe_vmaf2", "probe_slope", "probe_log_br"]
 
-# Training-set median of probe_log_br (52,316 rows, probe_data.jsonl) -
-# used as the neutral fallback for --no-probe.
-PROBE_LOG_BR_MEDIAN = 6.80
+PROBE_CACHE_DEFAULT = (Path(os.environ.get("XDG_CACHE_HOME",
+                                           Path.home() / ".cache"))
+                       / "crf-vmaf-predictor" / "probe_cache.json")
+
+
+def file_cache_key(video: str) -> str:
+    """Fast content key: sha256 of file size + sampled chunks (first /
+    middle / last 4 MiB). Good enough to detect content changes without
+    hashing multi-GB files end to end."""
+    p = Path(video)
+    size = p.stat().st_size
+    h = hashlib.sha256()
+    h.update(str(size).encode())
+    chunk = 4 * 1024 * 1024
+    with open(p, "rb") as f:
+        offsets = sorted({0, max(0, size // 2 - chunk // 2),
+                          max(0, size - chunk)})
+        for off in offsets:
+            f.seek(off)
+            h.update(f.read(chunk))
+    return h.hexdigest()
+
+
+def _load_probe_cache(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_probe_cache(path: Path, key: str, value: dict) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        cache = _load_probe_cache(path)   # merge, don't clobber
+        cache[key] = value
+        fd, tmp_name = tempfile.mkstemp(dir=str(path.parent),
+                                        prefix=path.name + ".",
+                                        suffix=".tmp")
+        with os.fdopen(fd, "w") as tmp:
+            tmp.write(json.dumps(cache))
+        os.replace(tmp_name, path)
+    except OSError:
+        pass   # cache is best-effort
+
 
 # Probe spec - MUST match collector/generate_probe_dataset.py exactly:
 # 2 s from the analysis start, target WxH (scale decrease + pad, yuv420p),
@@ -282,12 +321,25 @@ def _probe_one(video: str, start: float, w: int, h: int, codec: str,
 
 
 def run_probe(video: str, codec: str, width: int, height: int,
-              start: float = 0.0, threads: int = 4) -> dict:
-    """Two probe encodes -> {probe_vmaf, probe_vmaf2, probe_slope, probe_log_br}.
+              start: float = 0.0, threads: int = 4,
+              cache: bool = True, cache_path: str = None) -> tuple:
+    """Two probe encodes -> ({probe_vmaf, probe_vmaf2, probe_slope,
+    probe_log_br}, cache_hit).
 
-    Recommended for v2.x models (skip with --no-probe). Uses PROBE_SEC
-    seconds from `start` (same analysis start as feature extraction).
+    Uses PROBE_SEC seconds from `start` (same analysis start as feature extraction).
+    The two encodes run in parallel (each gets threads//2 ffmpeg threads).
+    Results are cached persistently, keyed by content hash + codec +
+    resolution + start, so repeat predictions on the same file are free.
     """
+    cpath = Path(cache_path) if cache_path else PROBE_CACHE_DEFAULT
+    key = None
+    if cache:
+        key = "|".join([file_cache_key(video), codec, str(width),
+                        str(height), f"{start:.3f}"])
+        hit = _load_probe_cache(cpath).get(key)
+        if hit is not None:
+            return dict(hit), True
+
     c1, c2 = PROBE_SPEC[codec]["crfs"]
     with tempfile.TemporaryDirectory() as tds:
         td = Path(tds)
@@ -301,15 +353,31 @@ def run_probe(video: str, codec: str, width: int, height: int,
         if r.returncode != 0 or not ref_yuv.exists() or ref_yuv.stat().st_size == 0:
             raise RuntimeError(f"probe reference decode failed: "
                                f"{(r.stderr or '')[-300:]}")
-        p1 = _probe_one(video, start, width, height, codec, c1, ref_yuv, td, threads)
-        p2 = _probe_one(video, start, width, height, codec, c2, ref_yuv, td, threads)
+        sub = max(1, threads // 2)
+        if threads <= 1:   # sequential - respect the caller's CPU limit
+            p1 = _probe_one(video, start, width, height, codec,
+                            c1, ref_yuv, td, 1)
+            p2 = _probe_one(video, start, width, height, codec,
+                            c2, ref_yuv, td, 1)
+        else:
+            t1 = threads // 2
+            t2 = threads - t1   # odd counts: no capacity left unused
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                f1 = ex.submit(_probe_one, video, start, width, height,
+                               codec, c1, ref_yuv, td, t1)
+                f2 = ex.submit(_probe_one, video, start, width, height,
+                               codec, c2, ref_yuv, td, t2)
+                p1, p2 = f1.result(), f2.result()
     v1, v2 = p1["vmaf"], p2["vmaf"]
-    return {
+    result = {
         "probe_vmaf": round(v1, 4),
         "probe_vmaf2": round(v2, 4),
         "probe_slope": round((v1 - v2) / (c2 - c1), 4),
         "probe_log_br": round(float(np.log1p(max(p1["bitrate_kbps"], 0))), 4),
     }
+    if cache and key:
+        _save_probe_cache(cpath, key, result)
+    return result, False
 
 
 def model_needs_probe(model: lgb.Booster) -> bool:
@@ -416,24 +484,187 @@ def baseline_preset(offsets: dict, codec: str, target_height: int) -> str:
     return b[str(target_height)] if isinstance(b, dict) else b
 
 
+def _predict_one(video, feats, meta, model, im_models, codec, width,
+                 height, target_vmaf, args, probe_feats):
+    """Single (codec, target_vmaf) prediction. Returns the result dict
+    (JSON-serializable) plus a formatted text line."""
+    row = build_feature_row(feats, meta, codec, target_vmaf, width, height)
+    row.update(probe_feats)
+    crf, raw = predict_crf(model, row)
+
+    q10_raw = q90_raw = None
+    if not args.no_interval and im_models:
+        _, q10_raw = predict_crf(im_models[0], row)
+        _, q90_raw = predict_crf(im_models[1], row)
+
+    preset_note = None
+    if args.preset:
+        offsets = load_preset_offsets(args.model)
+        if offsets is None:
+            raise SystemExit("--preset requires preset_offsets.json next to "
+                             "the model")
+        pn = normalize_preset(codec, args.preset)
+        base = baseline_preset(offsets, codec, height)
+        cell = None
+        if pn == base:
+            d = 0.0
+        else:
+            cell = offsets["cells"].get(f"{codec}|{pn}|{height}")
+            if cell is None:
+                avail = sorted({k.split("|")[1] for k in offsets["cells"]
+                                if k.startswith(codec + "|")} | {base})
+                raise SystemExit(f"no measured offset for {codec}/{pn} @ "
+                                 f"{height}p; available for {codec}: "
+                                 + ", ".join(avail))
+            d = float(cell["delta"])
+        if (args.calibration or args.crf_offset is not None) and d != 0.0:
+            d = 0.0
+        if d != 0.0:
+            lo, hi = CRF_RANGE[codec]
+            crf = int(round(min(max(raw + d, lo), hi)))
+            if q10_raw is not None:
+                q10_raw += d
+                q90_raw += d
+        preset_note = {"preset": pn, "baseline_preset": base, "crf_delta": d}
+        if cell:
+            preset_note["iqr"] = cell["iqr"]
+            preset_note["n_clips"] = cell["n_clips"]
+
+    cal_note = None
+    if args.calibration:
+        delta, entry = load_calibration(args.calibration, codec, height,
+                                        target_vmaf)
+        lo, hi = CRF_RANGE[codec]
+        crf = int(round(min(max(raw + delta, lo), hi)))
+        if q10_raw is not None:
+            q10_raw += delta
+            q90_raw += delta
+        cal_note = {"crf_delta": delta,
+                    "crf_uncalibrated": int(round(min(max(raw, lo), hi))),
+                    "source_entry": {k: entry[k] for k in
+                                     ("codec", "target_height", "target_vmaf",
+                                      "encoder_args", "n_used")}}
+    elif args.crf_offset is not None:
+        lo, hi = CRF_RANGE[codec]
+        crf = int(round(min(max(raw + args.crf_offset, lo), hi)))
+        if q10_raw is not None:
+            q10_raw += args.crf_offset
+            q90_raw += args.crf_offset
+        cal_note = {"crf_delta": args.crf_offset,
+                    "crf_uncalibrated": int(round(min(max(raw, lo), hi)))}
+
+    raw_eff = raw
+    if cal_note is not None:
+        raw_eff = raw + cal_note["crf_delta"]
+    elif preset_note is not None:
+        raw_eff = raw + preset_note["crf_delta"]
+    lo, hi = CRF_RANGE[codec]
+    saturated = raw_eff > hi
+    probe_ran = model_needs_probe(model)
+    if saturated:
+        extra = ""
+        if probe_ran and row.get("probe_vmaf", 0) >= 97:
+            extra = (f" (low-CRF probe VMAF is {row['probe_vmaf']:.1f} "
+                     "- this content barely degrades even at high quality)")
+        print(f"warning: target VMAF {target_vmaf:g} is likely "
+              f"unreachable for this video - effective raw prediction "
+              f"{raw_eff:.1f} exceeds the {codec} ladder maximum CRF "
+              f"{hi}{extra}. Returning CRF {hi}; actual VMAF will be higher "
+              f"than the target.", file=sys.stderr)
+
+    interval = None
+    if q10_raw is not None:
+        conformal_corr = None
+        if not args.no_conformal:
+            cf = load_conformal(args.model)
+            if cf:
+                conformal_corr = cf.get("codecs", {}).get(codec, {}).get(
+                    "correction")
+        interval = {"crf_q10": int(round(min(max(q10_raw, lo), hi))),
+                    "crf_q90": int(round(min(max(q90_raw, lo), hi))),
+                    "crf_q10_raw": round(q10_raw, 3),
+                    "crf_q90_raw": round(q90_raw, 3)}
+        if conformal_corr is not None:
+            interval["crf_q10_cal"] = int(round(min(
+                max(q10_raw - conformal_corr, lo), hi)))
+            interval["crf_q90_cal"] = int(round(min(
+                max(q90_raw + conformal_corr, lo), hi)))
+            interval["conformal_correction"] = round(conformal_corr, 4)
+
+    out = {"crf": crf, "crf_raw": round(raw, 3),
+           "codec": codec,
+           "target_height": height,
+           "target_vmaf": target_vmaf,
+           "analyzed_seconds": round(meta["analyzed_seconds"], 2),
+           "features": {k: row[k] for k in BASE_FEATS}}
+    if interval:
+        out["interval_q10_q90"] = interval
+    if preset_note:
+        out["preset"] = preset_note
+    if cal_note:
+        out["calibration"] = cal_note
+    if saturated:
+        out["saturation_warning"] = {
+            "message": "target VMAF likely unreachable; effective raw "
+                       "prediction clipped at ladder maximum",
+            "crf_raw_effective": round(raw_eff, 3),
+            "ladder_max_crf": hi,
+            "probe_vmaf": row.get("probe_vmaf") if probe_ran else None,
+        }
+
+    line = (f"predicted CRF: {crf}  (raw {raw:.2f})  "
+            f"[{codec} @ {height}p, target VMAF {target_vmaf:g}]")
+    if interval:
+        line += (f"\n80% interval (q10-q90): CRF {interval['crf_q10']}.."
+                 f"{interval['crf_q90']}  (raw {interval['crf_q10_raw']:.2f}"
+                 f"..{interval['crf_q90_raw']:.2f})")
+        if "crf_q10_cal" in interval:
+            line += (f"\ncalibrated band (split-conformal, 80% "
+                     f"coverage): CRF {interval['crf_q10_cal']}.."
+                     f"{interval['crf_q90_cal']}")
+    if preset_note:
+        line += (f"\npreset: {preset_note['preset']} "
+                 f"({preset_note['crf_delta']:+.2f} CRF vs baseline "
+                 f"{preset_note['baseline_preset']}"
+                 + (f", IQR {preset_note['iqr']:.2f}"
+                    if preset_note.get("iqr") is not None else "")
+                 + ")")
+    if cal_note:
+        line += (f"\ncalibration: {cal_note['crf_delta']:+.2f} CRF "
+                 f"(uncalibrated {cal_note['crf_uncalibrated']})")
+    if saturated:
+        line += (f"\n⚠ saturation: effective raw {raw_eff:.1f} clipped "
+                 f"at ladder max CRF {hi} — target VMAF likely "
+                 f"unreachable for this content, actual VMAF will "
+                 f"overshoot")
+    return out, line
+
+
 def main():
-    ap = argparse.ArgumentParser(description="Predict CRF for a target VMAF.")
+    ap = argparse.ArgumentParser(description="Predict CRF for a target VMAF.",
+                                 allow_abbrev=False)
     ap.add_argument("video")
-    ap.add_argument("--codec", required=True, choices=sorted(CRF_RANGE))
+    ap.add_argument("--codec", default=None, choices=sorted(CRF_RANGE))
     ap.add_argument("--target-height", type=int, required=True,
                     choices=sorted(RES_W))
-    ap.add_argument("--target-vmaf", type=float, required=True)
+    ap.add_argument("--target-vmaf", type=float, default=None)
+    ap.add_argument("--batch", default=None,
+                    help="JSON file with a list of jobs: "
+                         '[{"codec": "x265", "target_vmaf": 90}, ...]. '
+                         "Features and probes are computed once and reused "
+                         "across jobs with the same codec. Missing keys "
+                         "fall back to --codec/--target-vmaf.")
     ap.add_argument("--start", type=float, default=None,
                     help="optional: analyze from this second (default: whole file)")
     ap.add_argument("--duration", type=float, default=None,
                     help="optional: analyze only this many seconds")
     ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--model", default="model.txt")
-    ap.add_argument("--no-probe", action="store_true",
-                    help="v2.x models: skip the probe encode and fill the "
-                         "probe_* features with neutral defaults - faster, "
-                         "no vmaf CLI needed, but accuracy degrades towards "
-                         "v1.x levels (vmaf_mae ~3.7 instead of ~1.35)")
+    ap.add_argument("--probe-cache", default=None, metavar="PATH",
+                    help="probe cache JSON file (default: "
+                         "~/.cache/crf-vmaf-predictor/probe_cache.json)")
+    ap.add_argument("--no-probe-cache", action="store_true",
+                    help="disable the persistent probe cache")
     ap.add_argument("--no-interval", action="store_true",
                     help="point prediction only, skip the q10-q90 interval "
                          "even when model_q10.txt/model_q90.txt are present")
@@ -457,9 +688,31 @@ def main():
     ap.add_argument("--json", action="store_true", help="JSON output")
     args = ap.parse_args()
 
-    if not (60 <= args.target_vmaf <= 95):
-        print("warning: target VMAF outside the trained range 60-95; "
-              "expect degraded accuracy", file=sys.stderr)
+    # resolve job list (single or batch)
+    if args.batch:
+        try:
+            jobs = json.loads(Path(args.batch).read_text())
+        except (OSError, ValueError) as e:
+            ap.error(f"cannot read/parse --batch file: {e}")
+        if not isinstance(jobs, list) or not jobs:
+            ap.error("--batch file must contain a non-empty JSON list")
+    else:
+        jobs = [{}]
+    norm_jobs = []
+    for j in jobs:
+        if not isinstance(j, dict):
+            ap.error(f"batch jobs must be objects, got: {j!r:.80}")
+        codec = j.get("codec", args.codec)
+        tv = j.get("target_vmaf", args.target_vmaf)
+        if codec is None or tv is None:
+            ap.error("each job needs codec + target_vmaf (in the batch file "
+                     "or via --codec/--target-vmaf)")
+        if codec not in CRF_RANGE:
+            ap.error(f"unknown codec in batch job: {codec}")
+        if not (60 <= tv <= 95):
+            print(f"warning: target VMAF {tv:g} outside the trained range "
+                  "60-95; expect degraded accuracy", file=sys.stderr)
+        norm_jobs.append((codec, float(tv)))
 
     width = RES_W[args.target_height]
     feats, meta = extract_features(args.video, width, args.target_height,
@@ -471,199 +724,40 @@ def main():
               f"(< {MIN_RELIABLE_SECONDS:g} s) - frame statistics are noisy, "
               f"expect reduced accuracy", file=sys.stderr)
 
-    row = build_feature_row(feats, meta, args.codec, args.target_vmaf,
-                            width, args.target_height)
     model = lgb.Booster(model_file=args.model)
-
-    # v2.0: probe-encode - recommended but optional (--no-probe). Without
-    # it the probe_* features get neutral defaults and accuracy degrades
-    # towards v1.x levels. v1.x models (no probe_* features) never probe.
-    if model_needs_probe(model):
-        if args.no_probe:
-            row.update({
-                "probe_vmaf": args.target_vmaf,
-                "probe_vmaf2": args.target_vmaf,
-                "probe_slope": 0.0,
-                "probe_log_br": PROBE_LOG_BR_MEDIAN,
-            })
-            print("warning: --no-probe - probe features filled with neutral "
-                  "defaults; expect v1.x-level accuracy (vmaf_mae ~3.7 "
-                  "instead of ~1.35)", file=sys.stderr)
-        else:
-            row.update(run_probe(args.video, args.codec, width,
-                                 args.target_height,
-                                 start=args.start or 0.0,
-                                 threads=args.threads))
-    crf, raw = predict_crf(model, row)
-
-    # v1.5.0: 80% prediction interval from sibling quantile models
-    q10_raw = q90_raw = None
+    im_models = None
     if not args.no_interval:
-        im = load_interval_models(args.model)
-        if im:
-            _, q10_raw = predict_crf(im[0], row)
-            _, q90_raw = predict_crf(im[1], row)
+        im_models = load_interval_models(args.model)
 
-    # measured preset offset (preset_offsets.json next to the model);
-    # the model predicts the training-baseline preset
-    preset_note = None
-    if args.preset:
-        offsets = load_preset_offsets(args.model)
-        if offsets is None:
-            ap.error("--preset requires preset_offsets.json next to the model "
-                     f"({Path(args.model).parent / 'preset_offsets.json'} "
-                     "not found)")
-        pn = normalize_preset(args.codec, args.preset)
-        base = baseline_preset(offsets, args.codec, args.target_height)
-        cell = None
-        if pn == base:
-            d = 0.0
-        else:
-            cell = offsets["cells"].get(f"{args.codec}|{pn}|{args.target_height}")
-            if cell is None:
-                avail = sorted({k.split("|")[1] for k in offsets["cells"]
-                                if k.startswith(args.codec + "|")} | {base})
-                ap.error(f"no measured offset for {args.codec}/{pn} @ "
-                         f"{args.target_height}p; available for {args.codec}: "
-                         + ", ".join(avail))
-            d = float(cell["delta"])
-        if (args.calibration or args.crf_offset is not None) and d != 0.0:
-            print("warning: --calibration/--crf-offset already captures your "
-                  "encoder settings (incl. preset) — ignoring the --preset "
-                  "offset", file=sys.stderr)
-            d = 0.0
-        if d != 0.0:
-            lo, hi = CRF_RANGE[args.codec]
-            crf = int(round(min(max(raw + d, lo), hi)))
-            if q10_raw is not None:
-                q10_raw += d
-                q90_raw += d
-        preset_note = {"preset": pn, "baseline_preset": base, "crf_delta": d}
-        if cell:
-            preset_note["iqr"] = cell["iqr"]
-            preset_note["n_clips"] = cell["n_clips"]
+    # probe per codec (mandatory for v2.x models, cached across jobs)
+    probe_by_codec = {}
+    if model_needs_probe(model):
+        for codec in sorted({c for c, _ in norm_jobs}):
+            pf, hit = run_probe(args.video, codec, width,
+                                args.target_height,
+                                start=args.start or 0.0,
+                                threads=args.threads,
+                                cache=not args.no_probe_cache,
+                                cache_path=args.probe_cache)
+            probe_by_codec[codec] = pf
+            if hit and not args.json:
+                print(f"note: probe cache hit for {codec}",
+                      file=sys.stderr)
 
-    cal_note = None
-    if args.calibration:
-        delta, entry = load_calibration(args.calibration, args.codec,
-                                        args.target_height, args.target_vmaf)
-        lo, hi = CRF_RANGE[args.codec]
-        raw_cal = raw + delta
-        crf = int(round(min(max(raw_cal, lo), hi)))
-        if q10_raw is not None:
-            q10_raw += delta
-            q90_raw += delta
-        cal_note = {"crf_delta": delta, "crf_uncalibrated": int(round(min(max(raw, lo), hi))),
-                    "source_entry": {k: entry[k] for k in
-                                     ("codec", "target_height", "target_vmaf",
-                                      "encoder_args", "n_used")}}
-    elif args.crf_offset is not None:
-        lo, hi = CRF_RANGE[args.codec]
-        raw_cal = raw + args.crf_offset
-        crf = int(round(min(max(raw_cal, lo), hi)))
-        if q10_raw is not None:
-            q10_raw += args.crf_offset
-            q90_raw += args.crf_offset
-        cal_note = {"crf_delta": args.crf_offset,
-                    "crf_uncalibrated": int(round(min(max(raw, lo), hi)))}
-
-    # saturation detection (v2.0.1): computed on the FINAL effective raw
-    # prediction — after --preset / --calibration / --crf-offset deltas — so
-    # the warning reflects the CRF actually returned. An effective raw above
-    # the ladder top means even the most aggressive allowed CRF cannot
-    # degrade this content enough: the target VMAF is likely unreachable
-    # (easy/synthetic content whose VMAF floor at max CRF sits above the
-    # target). A real low-CRF probe_vmaf ~99 corroborates; the neutral
-    # --no-probe fallback (probe_vmaf == target_vmaf) is not evidence.
-    raw_eff = raw
-    if cal_note is not None:
-        raw_eff = raw + cal_note["crf_delta"]
-    elif preset_note is not None:
-        raw_eff = raw + preset_note["crf_delta"]
-    lo, hi = CRF_RANGE[args.codec]
-    saturated = raw_eff > hi
-    probe_ran = model_needs_probe(model) and not args.no_probe
-    if saturated:
-        extra = ""
-        if probe_ran and row.get("probe_vmaf", 0) >= 97:
-            extra = (f" (low-CRF probe VMAF is {row['probe_vmaf']:.1f} "
-                     "— this content barely degrades even at high quality)")
-        print(f"warning: target VMAF {args.target_vmaf:g} is likely "
-              f"unreachable for this video — effective raw prediction "
-              f"{raw_eff:.1f} exceeds the {args.codec} ladder maximum CRF "
-              f"{hi}{extra}. Returning CRF {hi}; actual VMAF will be higher "
-              f"than the target.", file=sys.stderr)
-
-    interval = None
-    if q10_raw is not None:
-        lo, hi = CRF_RANGE[args.codec]
-        conformal_corr = None
-        if not args.no_conformal:
-            cf = load_conformal(args.model)
-            if cf:
-                conformal_corr = cf.get("codecs", {}).get(args.codec, {}).get(
-                    "correction")
-        interval = {"crf_q10": int(round(min(max(q10_raw, lo), hi))),
-                    "crf_q90": int(round(min(max(q90_raw, lo), hi))),
-                    "crf_q10_raw": round(q10_raw, 3),
-                    "crf_q90_raw": round(q90_raw, 3)}
-        if conformal_corr is not None:
-            interval["crf_q10_cal"] = int(round(min(
-                max(q10_raw - conformal_corr, lo), hi)))
-            interval["crf_q90_cal"] = int(round(min(
-                max(q90_raw + conformal_corr, lo), hi)))
-            interval["conformal_correction"] = round(conformal_corr, 4)
+    results, lines = [], []
+    for codec, tv in norm_jobs:
+        pf = dict(probe_by_codec.get(codec, {}))
+        out, line = _predict_one(args.video, feats, meta, model, im_models,
+                                 codec, width, args.target_height, tv,
+                                 args, pf)
+        results.append(out)
+        lines.append(line)
 
     if args.json:
-        out = {"crf": crf, "crf_raw": round(raw, 3),
-               "codec": args.codec,
-               "target_height": args.target_height,
-               "target_vmaf": args.target_vmaf,
-               "analyzed_seconds": round(meta["analyzed_seconds"], 2),
-               "features": {k: row[k] for k in BASE_FEATS}}
-        if interval:
-            out["interval_q10_q90"] = interval
-        if preset_note:
-            out["preset"] = preset_note
-        if cal_note:
-            out["calibration"] = cal_note
-        if saturated:
-            out["saturation_warning"] = {
-                "message": "target VMAF likely unreachable; effective raw "
-                           "prediction clipped at ladder maximum",
-                "crf_raw_effective": round(raw_eff, 3),
-                "ladder_max_crf": hi,
-                "probe_vmaf": row.get("probe_vmaf") if probe_ran else None,
-            }
-        print(json.dumps(out, indent=1))
+        payload = results[0] if len(results) == 1 else {"results": results}
+        print(json.dumps(payload, indent=1))
     else:
-        line = (f"predicted CRF: {crf}  (raw {raw:.2f})  "
-                f"[{args.codec} @ {args.target_height}p, target VMAF "
-                f"{args.target_vmaf:g}]")
-        if interval:
-            line += (f"\n80% interval (q10-q90): CRF {interval['crf_q10']}.."
-                     f"{interval['crf_q90']}  (raw {interval['crf_q10_raw']:.2f}"
-                     f"..{interval['crf_q90_raw']:.2f})")
-            if "crf_q10_cal" in interval:
-                line += (f"\ncalibrated band (split-conformal, 80% "
-                         f"coverage): CRF {interval['crf_q10_cal']}.."
-                         f"{interval['crf_q90_cal']}")
-        if preset_note:
-            line += (f"\npreset: {preset_note['preset']} "
-                     f"({preset_note['crf_delta']:+.2f} CRF vs baseline "
-                     f"{preset_note['baseline_preset']}"
-                     + (f", IQR {preset_note['iqr']:.2f}"
-                        if preset_note.get("iqr") is not None else "")
-                     + ")")
-        if cal_note:
-            line += (f"\ncalibration: {cal_note['crf_delta']:+.2f} CRF "
-                     f"(uncalibrated {cal_note['crf_uncalibrated']})")
-        if saturated:
-            line += (f"\n⚠ saturation: effective raw {raw_eff:.1f} clipped "
-                     f"at ladder max CRF {hi} — target VMAF likely "
-                     f"unreachable for this content, actual VMAF will "
-                     f"overshoot")
-        print(line)
+        print(("\n\n".join(lines)))
 
 
 if __name__ == "__main__":

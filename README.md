@@ -243,14 +243,6 @@ VMAF 90:
 | vp9   | 23.2 s     | 13.9 s       | +9.3 s (+67%)  |
 | av1   | 19.2 s     | 13.9 s       | +5.3 s (+38%)  |
 
-The ~14 s baseline is feature extraction (SI/TI/motion over the
-analyzed segment) and is identical in both modes; the probe itself (two
-2 s encodes plus VMAF) adds a roughly constant ~4-9 s depending on
-codec. In return you get the v2.x accuracy (VMAF MAE ~1.4 vs ~3.7 without
-probe features) and a much tighter prediction interval (on the same
-segment: CRF 28 with band 26-28 vs CRF 31 with band 30-36, x264 @ target
-VMAF 90). Absolute times scale with segment length and hardware.
-
 
 ## Strengths
 

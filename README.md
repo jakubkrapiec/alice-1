@@ -248,17 +248,25 @@ x265 79.0%, vp9 79.1%, av1 85.0%.
 
 ### Runtime: probe vs `--no-probe` (predict.py wall time)
 
-Measured on a synthetic 1080p30 clip (ffmpeg `testsrc2`), analyzing a
-**10 s segment** (`--start 0 --duration 10`), Google Cloud `n2d-highcpu-16`
-(AMD EPYC 7B13, europe-north1), 3 runs per cell, mean wall time, target
-VMAF 90:
+Measured on a synthetic 1080p30 clip (ffmpeg `testsrc2`, **10 s** long),
+analyzing the whole file, Google Cloud `n2d-highcpu-16` (AMD EPYC 7B13,
+europe-north1), 3 runs per cell, mean wall time, target VMAF 90,
+`--threads 16` (v2.3.0, probe encodes run in parallel):
 
-| Codec | with probe | `--no-probe` | probe overhead |
-| ----- | ---------- | ------------ | -------------- |
-| x264  | 17.9 s     | 13.9 s       | +4.0 s (+29%)  |
-| x265  | 18.3 s     | 14.0 s       | +4.3 s (+31%)  |
-| vp9   | 23.2 s     | 13.9 s       | +9.3 s (+67%)  |
-| av1   | 19.2 s     | 13.9 s       | +5.3 s (+38%)  |
+| Codec | probe (cold cache) | probe (cache hit) | `--no-probe` | cold probe overhead |
+| ----- | ------------------ | ----------------- | ------------ | ------------------- |
+| x264  | 13.2 s             | 12.5 s            | 12.4 s       | +0.8 s (+6%)        |
+| x265  | 13.3 s             | 12.4 s            | 12.5 s       | +0.8 s (+6%)        |
+| vp9   | 14.1 s             | 12.4 s            | 12.5 s       | +1.6 s (+13%)       |
+| av1   | 13.5 s             | 12.5 s            | 12.5 s       | +1.0 s (+8%)        |
+
+The probe overhead is the cold-cache case; with the persistent probe cache
+(default) a repeated prediction on the same file skips the probe entirely
+and matches `--no-probe` time. For comparison, v2.2.0 (sequential probe
+encodes, same machine and clip) took 15.0 s (x264) / 20.8 s (vp9) with the
+probe - the parallel probe is ~12% / ~32% faster before caching kicks in.
+Batch mode amortizes feature extraction too: 4 codecs in one invocation
+took 12.6 s (warm probe cache) vs ~50 s for four separate runs.
 
 
 ## Strengths

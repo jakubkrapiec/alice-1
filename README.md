@@ -88,9 +88,9 @@ python predict.py input.mp4 --target-height 1080 --batch jobs.json --json
 
 The two probe encodes run in parallel, and probe results are cached in
 `~/.cache/crf-vmaf-predictor/probe_cache.json` (keyed by a content hash of
-the file + codec + resolution), so repeated predictions on the same video
-skip the probe entirely. Override with `--probe-cache PATH` or disable with
-`--no-probe-cache`.
+the file + codec + resolution + analysis start offset), so repeated
+predictions on the same video skip the probe entirely. Override with
+`--probe-cache PATH` or disable with `--no-probe-cache`.
 
 Minimal programmatic use:
 

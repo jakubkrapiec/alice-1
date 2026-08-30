@@ -363,12 +363,20 @@ def run_probe(video: str, codec: str, width: int, height: int,
             raise RuntimeError(f"probe reference decode failed: "
                                f"{(r.stderr or '')[-300:]}")
         sub = max(1, threads // 2)
-        with ThreadPoolExecutor(max_workers=2) as ex:
-            f1 = ex.submit(_probe_one, video, start, width, height, codec,
-                           c1, ref_yuv, td, sub)
-            f2 = ex.submit(_probe_one, video, start, width, height, codec,
-                           c2, ref_yuv, td, sub)
-            p1, p2 = f1.result(), f2.result()
+        if threads <= 1:   # sequential - respect the caller's CPU limit
+            p1 = _probe_one(video, start, width, height, codec,
+                            c1, ref_yuv, td, 1)
+            p2 = _probe_one(video, start, width, height, codec,
+                            c2, ref_yuv, td, 1)
+        else:
+            t1 = threads // 2
+            t2 = threads - t1   # odd counts: no capacity left unused
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                f1 = ex.submit(_probe_one, video, start, width, height,
+                               codec, c1, ref_yuv, td, t1)
+                f2 = ex.submit(_probe_one, video, start, width, height,
+                               codec, c2, ref_yuv, td, t2)
+                p1, p2 = f1.result(), f2.result()
     v1, v2 = p1["vmaf"], p2["vmaf"]
     result = {
         "probe_vmaf": round(v1, 4),
@@ -705,6 +713,8 @@ def main():
         jobs = [{}]
     norm_jobs = []
     for j in jobs:
+        if not isinstance(j, dict):
+            ap.error(f"batch jobs must be objects, got: {j!r:.80}")
         codec = j.get("codec", args.codec)
         tv = j.get("target_vmaf", args.target_vmaf)
         if codec is None or tv is None:

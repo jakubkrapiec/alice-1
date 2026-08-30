@@ -131,7 +131,7 @@ All content features are computed on the target-resolution segment, after bicubi
 | 10 | `codec` | Categorical: `av1`, `vp9`, `x264`, `x265`. |
 | 11 | `target_vmaf` | Desired VMAF score (60–95). |
 | 12–16 | derived | `si_x_ti=si_mean·ti_mean`, `motion_x_ti=vmafmotion·ti_mean`, `si_cv=si_std/(si_mean+1e-6)`, `ti_cv=ti_std/(ti_mean+1e-6)`, `res_ratio=source_height/target_height` |
-| 17–20 | probe (v2.0) | `probe_vmaf`, `probe_vmaf2` = VMAF of two 2 s probe encodes at fixed CRFs (x264/x265: 28/34, vp9/av1: 40/46, training-baseline presets), `probe_slope` = their VMAF slope per CRF point, `probe_log_br` = log1p of the first probe's bitrate (kbps) |
+| 17–20 | probe | `probe_vmaf`, `probe_vmaf2` = VMAF of two 2 s probe encodes at fixed CRFs (x264/x265: 28/34, vp9/av1: 40/46, training-baseline presets), `probe_slope` = their VMAF slope per CRF point, `probe_log_br` = log1p of the first probe's bitrate (kbps) |
 
 `predict.py` computes all of these for you. The probe features come from
 `run_probe()` (two 2 s encodes + VMAF measurements, a few seconds of extra
@@ -226,8 +226,7 @@ Predicted CRF is mapped back to VMAF via the segment's fitted curve and compared
 | CRF MAE        | 0.53                 |
 | within ±2 VMAF | 78.0%                |
 
-Per-codec CRF MAE: x264 0.45, x265 0.53, vp9 1.07, av1 1.15. The probe
-features cut the label-space VMAF MAE from 3.67 to ~1.4.
+Per-codec CRF MAE: x264 0.45, x265 0.53, vp9 1.07, av1 1.15.
 
 
 #### 80% prediction interval (q10–q90, label-space)

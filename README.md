@@ -73,7 +73,24 @@ python predict.py input.mp4 --codec av1 --target-height 2160 --target-vmaf 90
 #    "80% interval (q10-q90): CRF 36..47  (raw 35.60..47.12)"
 #    "calibrated band (split-conformal, 80% coverage): CRF 36..48"
 # (point prediction only: --no-interval; raw uncalibrated band: --no-conformal)
+
+# Machine-readable output:
+python predict.py input.mp4 --codec x265 --target-height 1080 --target-vmaf 90 --json
+
+# Batch: several (codec, target) jobs on the same file - features and
+# probe encodes are computed once and reused (probe cached on disk):
+cat jobs.json
+# [{"codec": "x264", "target_vmaf": 90},
+#  {"codec": "x265", "target_vmaf": 88},
+#  {"codec": "av1",  "target_vmaf": 88}]
+python predict.py input.mp4 --target-height 1080 --batch jobs.json --json
 ```
+
+The two probe encodes run in parallel, and probe results are cached in
+`~/.cache/crf-vmaf-predictor/probe_cache.json` (keyed by a content hash of
+the file + codec + resolution), so repeated predictions on the same video
+skip the probe entirely. Override with `--probe-cache PATH` or disable with
+`--no-probe-cache`.
 
 Minimal programmatic use:
 

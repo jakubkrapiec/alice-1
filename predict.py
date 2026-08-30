@@ -97,7 +97,9 @@ def file_cache_key(video: str) -> str:
     h.update(str(size).encode())
     chunk = 4 * 1024 * 1024
     with open(p, "rb") as f:
-        for off in {0, max(0, size // 2 - chunk // 2), max(0, size - chunk)}:
+        offsets = sorted({0, max(0, size // 2 - chunk // 2),
+                          max(0, size - chunk)})
+        for off in offsets:
             f.seek(off)
             h.update(f.read(chunk))
     return h.hexdigest()
@@ -115,9 +117,12 @@ def _save_probe_cache(path: Path, key: str, value: dict) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         cache = _load_probe_cache(path)   # merge, don't clobber
         cache[key] = value
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(cache))
-        os.replace(tmp, path)
+        fd, tmp_name = tempfile.mkstemp(dir=str(path.parent),
+                                        prefix=path.name + ".",
+                                        suffix=".tmp")
+        with os.fdopen(fd, "w") as tmp:
+            tmp.write(json.dumps(cache))
+        os.replace(tmp_name, path)
     except OSError:
         pass   # cache is best-effort
 
@@ -557,6 +562,16 @@ def _predict_one(video, feats, meta, model, im_models, codec, width,
     lo, hi = CRF_RANGE[codec]
     saturated = raw_eff > hi
     probe_ran = model_needs_probe(model) and not no_probe
+    if saturated:
+        extra = ""
+        if probe_ran and row.get("probe_vmaf", 0) >= 97:
+            extra = (f" (low-CRF probe VMAF is {row['probe_vmaf']:.1f} "
+                     "- this content barely degrades even at high quality)")
+        print(f"warning: target VMAF {target_vmaf:g} is likely "
+              f"unreachable for this video - effective raw prediction "
+              f"{raw_eff:.1f} exceeds the {codec} ladder maximum CRF "
+              f"{hi}{extra}. Returning CRF {hi}; actual VMAF will be higher "
+              f"than the target.", file=sys.stderr)
 
     interval = None
     if q10_raw is not None:
@@ -680,7 +695,10 @@ def main():
 
     # resolve job list (single or batch)
     if args.batch:
-        jobs = json.loads(Path(args.batch).read_text())
+        try:
+            jobs = json.loads(Path(args.batch).read_text())
+        except (OSError, ValueError) as e:
+            ap.error(f"cannot read/parse --batch file: {e}")
         if not isinstance(jobs, list) or not jobs:
             ap.error("--batch file must contain a non-empty JSON list")
     else:
